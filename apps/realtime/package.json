@@ -1,0 +1,1 @@
+{"name":"@syncspace/realtime","private":true,"scripts":{"dev":"tsx watch src/server.ts","start":"node dist/server.js","build":"tsc -p tsconfig.json","typecheck":"tsc --noEmit -p tsconfig.json"},"dependencies":{"cors":"^2.8.5","socket.io":"^4.8.1","yjs":"^13.6.27"},"devDependencies":{"@types/cors":"^2.8.17","@types/node":"^22.0.0","tsx":"^4.19.0","typescript":"^5.9.0"}}

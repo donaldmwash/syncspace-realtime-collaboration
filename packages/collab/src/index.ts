@@ -1,0 +1,1 @@
+import * as Y from "yjs";export function mergeConcurrentEdits(left:Uint8Array,right:Uint8Array){const a=new Y.Doc();const b=new Y.Doc();Y.applyUpdate(a,left);Y.applyUpdate(b,right);Y.applyUpdate(a,Y.encodeStateAsUpdate(b));Y.applyUpdate(b,Y.encodeStateAsUpdate(a));return {a:a.getText("content").toString(),b:b.getText("content").toString()};}

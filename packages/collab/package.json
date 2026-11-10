@@ -1,0 +1,1 @@
+{"name":"@syncspace/collab","version":"1.0.0","private":true,"main":"src/index.ts","scripts":{"test":"tsx --test test/*.test.ts","typecheck":"tsc --noEmit"},"dependencies":{"yjs":"^13.6.27"},"devDependencies":{"tsx":"^4.19.0","typescript":"^5.9.0","@types/node":"^22.0.0"}}
