@@ -1,1 +1,1 @@
-@import "tailwindcss"; :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#080d18;color:#e7edf8;font-family:Arial,Helvetica,sans-serif}button,input,textarea{font:inherit}button{cursor:pointer}.editor p{margin:.65rem 0;line-height:1.75}.editor:focus{outline:none}
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#080d18;color:#e7edf8;font-family:Arial,Helvetica,sans-serif}button,input,textarea{font:inherit}button{cursor:pointer}.editor p{margin:.65rem 0;line-height:1.75}.editor:focus{outline:none}
