@@ -1269,7 +1269,7 @@ export function Workspace() {
                     <button onClick={() => void saveMessage(message)} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Save</button>
                     <button onClick={() => setForwardMessageId(message.id)} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Forward</button>
                     {["owner","admin"].includes(activeConversation.role ?? "") && <button onClick={() => void pinMessage(message)} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Pin</button>}
-                    {mine && <><button onClick={() => { setEditingId(message.id); setEditDraft(message.body ?? ""); }} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Edit</button><button onClick={() => void deleteMessage(message.id)} style={{ border: 0, background: "transparent", color: "#ff9eae", fontSize: 11, cursor: "pointer" }}>Delete</button></>}
+                    {mine && <>{message.message_type !== "contact" && <button onClick={() => { setEditingId(message.id); setEditDraft(message.body ?? ""); }} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Edit</button>}<button onClick={() => void deleteMessage(message.id)} style={{ border: 0, background: "transparent", color: "#ff9eae", fontSize: 11, cursor: "pointer" }}>Delete</button></>}
                   </div>
                 </article>;
               })}
