@@ -29,6 +29,7 @@ type Message = {
   attachments?: Attachment[];
   reactions?: { emoji: string; user_id: string }[];
   receipts?: { user_id: string; read_at: string | null }[];
+  polls?: { id: string; question: string; allows_multiple: boolean; closes_at: string | null; poll_options: { id: string; label: string; position: number }[]; poll_votes: { option_id: string; user_id: string }[] } | { id: string; question: string; allows_multiple: boolean; closes_at: string | null; poll_options: { id: string; label: string; position: number }[]; poll_votes: { option_id: string; user_id: string }[] }[];
   reply?: { body: string | null; sender?: { display_name: string } } | null;
 };
 
@@ -68,6 +69,10 @@ export function Workspace() {
   const [profileUsername, setProfileUsername] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
   const [showProfile, setShowProfile] = useState(false);
+  const [showPoll, setShowPoll] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollOptions, setPollOptions] = useState("");
+  const [pollMultiple, setPollMultiple] = useState(false);
   const [showPasswordRecovery, setShowPasswordRecovery] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
@@ -100,7 +105,7 @@ export function Workspace() {
     if (!supabase || !conversationId) return;
     const { data, error } = await supabase
       .from("messages")
-      .select("id,conversation_id,sender_id,body,message_type,reply_to_id,created_at,edited_at,deleted_at,sender:profiles!messages_sender_id_fkey(display_name,avatar_url),attachments(id,file_name,mime_type,size_bytes,object_path),reactions:message_reactions(emoji,user_id),receipts:message_receipts(user_id,read_at),reply:messages!messages_reply_to_id_fkey(id,body,sender:profiles!messages_sender_id_fkey(display_name))")
+      .select("id,conversation_id,sender_id,body,message_type,reply_to_id,created_at,edited_at,deleted_at,sender:profiles!messages_sender_id_fkey(display_name,avatar_url),attachments(id,file_name,mime_type,size_bytes,object_path),reactions:message_reactions(emoji,user_id),receipts:message_receipts(user_id,read_at),polls(id,question,allows_multiple,closes_at,poll_options(id,label,position),poll_votes(option_id,user_id)),reply:messages!messages_reply_to_id_fkey(id,body,sender:profiles!messages_sender_id_fkey(display_name))")
       .eq("conversation_id", conversationId)
       .is("deleted_at", null)
       .order("created_at", { ascending: true })
@@ -112,7 +117,7 @@ export function Workspace() {
         const { data: signed } = await supabase.storage.from("conversation-files").createSignedUrl(file.object_path, 3600);
         return { ...file, signedUrl: signed?.signedUrl };
       }));
-      return { ...row, sender: Array.isArray(row.sender) ? row.sender[0] : row.sender, reply: Array.isArray(row.reply) ? row.reply[0] : row.reply, attachments } as Message;
+      return { ...row, sender: Array.isArray(row.sender) ? row.sender[0] : row.sender, reply: Array.isArray(row.reply) ? row.reply[0] : row.reply, polls: Array.isArray(row.polls) ? row.polls[0] : row.polls, attachments } as Message;
     }));
     setMessages(hydrated);
     const unread = rows.filter((row) => row.sender_id !== user?.id).map((row) => ({ message_id: row.id, user_id: user?.id, read_at: new Date().toISOString() }));
@@ -161,6 +166,8 @@ export function Workspace() {
     channel
       .on("postgres_changes", { event: "*", schema: "public", table: "messages", filter: "conversation_id=eq." + activeId }, () => void loadMessages(activeId))
       .on("postgres_changes", { event: "*", schema: "public", table: "message_reactions" }, () => void loadMessages(activeId))
+      .on("postgres_changes", { event: "*", schema: "public", table: "poll_votes" }, () => void loadMessages(activeId))
+      .on("postgres_changes", { event: "*", schema: "public", table: "poll_options" }, () => void loadMessages(activeId))
       .on("broadcast", { event: "typing" }, ({ payload }) => {
         if (payload?.userId !== user.id) {
           setTypingName(String(payload?.name ?? "Someone"));
@@ -353,6 +360,51 @@ export function Workspace() {
     setNotice(error ? (error.code === "23505" ? "That message is already saved." : error.message) : "Message saved to your Saved Messages.");
   }
 
+
+  async function createPoll(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !user || !activeConversation) return;
+    const question = pollQuestion.trim().slice(0, 500);
+    const options = pollOptions.split("\n").map((item) => item.trim().slice(0, 200)).filter(Boolean);
+    if (!question || options.length < 2 || options.length > 10) {
+      setNotice("A poll needs a question and between 2 and 10 answer options.");
+      return;
+    }
+    setBusy(true);
+    const { data: message, error: messageError } = await supabase.from("messages").insert({
+      conversation_id: activeConversation.id, sender_id: user.id, body: question, message_type: "system",
+    }).select("id").single();
+    if (messageError) { setNotice(messageError.message); setBusy(false); return; }
+    const { data: poll, error: pollError } = await supabase.from("polls").insert({
+      message_id: message.id, conversation_id: activeConversation.id, question,
+      allows_multiple: pollMultiple, created_by: user.id,
+    }).select("id").single();
+    if (pollError) { setNotice("Poll could not be created: " + pollError.message); setBusy(false); return; }
+    const { error: optionsError } = await supabase.from("poll_options").insert(options.map((label, position) => ({ poll_id: poll.id, label, position })));
+    if (optionsError) setNotice("Poll created but its options could not be saved: " + optionsError.message);
+    else { setNotice("Poll shared."); setShowPoll(false); setPollQuestion(""); setPollOptions(""); setPollMultiple(false); await loadMessages(activeId); }
+    setBusy(false);
+  }
+
+  async function votePoll(poll: NonNullable<Message["polls"]> extends (infer T)[] ? T : NonNullable<Message["polls"]>, optionId: string) {
+    if (!supabase || !user) return;
+    if (poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now()) { setNotice("This poll is closed."); return; }
+    const existing = poll.poll_votes.filter((vote) => vote.user_id === user.id);
+    const alreadySelected = existing.some((vote) => vote.option_id === optionId);
+    if (!poll.allows_multiple && !alreadySelected && existing.length) {
+      const { error } = await supabase.from("poll_votes").delete().eq("poll_id", poll.id).eq("user_id", user.id);
+      if (error) { setNotice(error.message); return; }
+    } else if (alreadySelected) {
+      const { error } = await supabase.from("poll_votes").delete().eq("poll_id", poll.id).eq("user_id", user.id).eq("option_id", optionId);
+      if (error) { setNotice(error.message); return; }
+      await loadMessages(activeId);
+      return;
+    }
+    const { error } = await supabase.from("poll_votes").insert({ poll_id: poll.id, option_id: optionId, user_id: user.id });
+    setNotice(error ? error.message : "Your vote has been recorded.");
+    await loadMessages(activeId);
+  }
+
   async function uploadFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -450,12 +502,13 @@ export function Workspace() {
               {visibleMessages.map((message) => {
                 const mine = message.sender_id === user.id;
                 const file = message.attachments?.[0];
+                const poll = Array.isArray(message.polls) ? message.polls[0] : message.polls;
                 const reply = Array.isArray(message.reply) ? message.reply[0] : message.reply;
                 return <article key={message.id} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "min(82%, 720px)", minWidth: 130 }}>
                   <div style={{ color: mine ? "#9db8ff" : "#8ce0b0", fontSize: 11, margin: "0 5px 5px" }}>{mine ? "You" : message.sender?.display_name || "Member"} · {new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{message.edited_at ? " · Edited" : ""}{mine && message.receipts?.some((receipt) => receipt.read_at) ? " · ✓✓ Read" : ""}</div>
                   {reply && <div style={{ padding: "7px 10px", borderLeft: "3px solid #86a8ff", background: "#111f34", borderRadius: 7, color: "#aebfda", fontSize: 11, marginBottom: 4 }}>Replying to {reply.sender?.display_name || "member"}: {(reply.body || "Attachment").slice(0, 120)}</div>}
                   {editingId === message.id ? <div style={{ ...panel, padding: 9 }}><textarea value={editDraft} onChange={(e) => setEditDraft(e.target.value)} style={{ ...inputStyle, minHeight: 80 }} /><div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}><button onClick={() => setEditingId("")} style={secondaryButton}>Cancel</button><button onClick={() => void editMessage(message.id)} style={primaryButton}>Save</button></div></div> : <div style={{ background: mine ? "#20365c" : "#1a2940", borderRadius: 13, padding: "11px 14px", lineHeight: 1.6, overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>
-                    {file ? <div style={{ display: "grid", gap: 7 }}>
+                    {poll ? <div style={{ display: "grid", gap: 9, minWidth: 230 }}><strong>{poll.question}</strong>{poll.poll_options.sort((a,b) => a.position-b.position).map((option) => { const count = poll.poll_votes.filter((vote) => vote.option_id === option.id).length; const selected = poll.poll_votes.some((vote) => vote.option_id === option.id && vote.user_id === user.id); const total = poll.poll_votes.length; return <button key={option.id} onClick={() => void votePoll(poll, option.id)} disabled={!!poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now()} style={{ textAlign: "left", padding: 9, borderRadius: 8, border: "1px solid " + (selected ? "#86a8ff" : "#40516c"), background: selected ? "#263f68" : "#15243a", color: "#e7eefb" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>{selected ? "✓ " : ""}{option.label}</span><small>{count}</small></div><div style={{ height: 4, background: "#34445d", borderRadius: 5, marginTop: 7 }}><div style={{ width: (total ? Math.round(count / total * 100) : 0) + "%", height: "100%", background: "#86a8ff", borderRadius: 5 }} /></div></button>; })}<small style={{ color: "#aebfda" }}>{poll.poll_votes.length} vote(s) · {poll.allows_multiple ? "Multiple answers" : "Choose one"}{poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now() ? " · Closed" : ""}</small></div> : file ? <div style={{ display: "grid", gap: 7 }}>
                       {file.mime_type?.startsWith("image/") && file.signedUrl && <a href={file.signedUrl} target="_blank" rel="noreferrer"><img src={file.signedUrl} alt={file.file_name} style={{ maxWidth: "100%", maxHeight: 300, borderRadius: 8 }} /></a>}
                       {file.mime_type?.startsWith("video/") && file.signedUrl && <video src={file.signedUrl} controls style={{ maxWidth: "100%", maxHeight: 320 }} />}
                       {file.mime_type?.startsWith("audio/") && file.signedUrl && <audio src={file.signedUrl} controls />}
@@ -477,6 +530,7 @@ export function Workspace() {
             <form onSubmit={sendMessage} style={{ padding: 14, borderTop: "1px solid #26334b", display: "flex", gap: 9, alignItems: "center" }}>
               <input ref={fileRef} type="file" onChange={uploadFile} disabled={uploading} style={{ display: "none" }} />
               <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading} style={{ ...secondaryButton, fontSize: 19 }}>{uploading ? "…" : "＋"}</button>
+              <button type="button" onClick={() => setShowPoll(true)} style={secondaryButton}>Poll</button>
               <input value={draft} onChange={(e) => notifyTyping(e.target.value)} placeholder={activeConversation.is_announcement_only && activeConversation.role === "member" ? "Only admins can post here" : "Write a message…"} disabled={activeConversation.is_announcement_only && !["owner","admin"].includes(activeConversation.role ?? "")} style={{ ...inputStyle, flex: 1 }} />
               <button type="submit" disabled={!draft.trim() || (activeConversation.is_announcement_only && !["owner","admin"].includes(activeConversation.role ?? ""))} style={primaryButton}>Send</button>
             </form>
@@ -486,6 +540,7 @@ export function Workspace() {
       </div>
 
       {showPasswordRecovery && <div style={modalStyle}><form onSubmit={updateRecoveredPassword} style={{ ...panel, width: "min(100%, 420px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Choose a new password</h2><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} required placeholder="New password (8+ characters)" style={inputStyle} /><button disabled={busy} style={primaryButton}>Update password</button><p style={{ color: "#8193b1", fontSize: 12 }}>{notice}</p></form></div>}
+      {showPoll && <div style={modalStyle}><form onSubmit={createPoll} style={{ ...panel, width: "min(100%, 480px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Create a poll</h2><input value={pollQuestion} onChange={(e) => setPollQuestion(e.target.value)} maxLength={500} required placeholder="Ask a question" style={inputStyle} /><textarea value={pollOptions} onChange={(e) => setPollOptions(e.target.value)} rows={5} placeholder={"One answer per line\nOption 2"} style={{ ...inputStyle, resize: "vertical" }} /><label style={{ display: "flex", gap: 8, alignItems: "center", color: "#cbd8ec", fontSize: 13 }}><input type="checkbox" checked={pollMultiple} onChange={(e) => setPollMultiple(e.target.checked)} /> Allow multiple answers</label><small style={{ color: "#8193b1" }}>Add 2–10 options, one per line. Votes are visible to conversation members.</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowPoll(false)} style={secondaryButton}>Cancel</button><button disabled={busy} style={primaryButton}>Share poll</button></div></form></div>}
       {showCreate && <div style={modalStyle}><form onSubmit={createConversation} style={{ ...panel, width: "min(100%, 440px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Create a conversation</h2><div style={{ display: "flex", gap: 8 }}><button type="button" onClick={() => setNewType("group")} style={{ ...secondaryButton, flex: 1, background: newType === "group" ? "#20365c" : "transparent" }}>Group</button><button type="button" onClick={() => setNewType("channel")} style={{ ...secondaryButton, flex: 1, background: newType === "channel" ? "#20365c" : "transparent" }}>Channel</button></div><input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder={newType === "group" ? "Group name" : "Channel name"} maxLength={100} required style={inputStyle} /><p style={{ color: "#8193b1", fontSize: 12 }}>{newType === "channel" ? "Channels are announcement-first spaces. Only owners and admins can post." : "Groups are private. Add people by their SyncSpace username after creation."}</p><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowCreate(false)} style={secondaryButton}>Cancel</button><button disabled={busy} style={primaryButton}>Create</button></div></form></div>}
 
       {showMembers && activeConversation && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 480px)", padding: 22 }}><h2 style={{ marginTop: 0 }}>Add members</h2><p style={{ color: "#8193b1", fontSize: 13 }}>Search by exact or partial username. People must set a username in their profile to be found.</p><form onSubmit={findMembers} style={{ display: "flex", gap: 8 }}><input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="@username" style={inputStyle} /><button style={primaryButton}>Find</button></form><div style={{ display: "grid", gap: 8, marginTop: 14 }}>{memberResults.map((member) => <div key={member.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 10, background: "#14233a", borderRadius: 8 }}><span>{member.display_name} <small style={{ color: "#8193b1" }}>@{member.username}</small></span><div style={{ display: "flex", gap: 6 }}><button onClick={() => void addMember(member.id)} style={secondaryButton}>Add</button><button onClick={() => void startDirect(member)} style={secondaryButton}>Message</button></div></div>)}</div><button onClick={() => setShowMembers(false)} style={{ ...secondaryButton, width: "100%", marginTop: 14 }}>Close</button></section></div>}
