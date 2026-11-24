@@ -74,7 +74,7 @@ io.on("connection", (socket) => {
     if (typeof payload?.id !== "string") return;
     const history = roomMessages.get(roomId) ?? [];
     const message = history.find((item) => item.id === payload.id);
-    if (!message || message.senderId !== socket.id) return;
+    if (!message || message.senderId !== authorId) return;
     roomMessages.set(roomId, history.filter((item) => item.id !== payload.id));
     io.to(roomId).emit("chat:message-deleted", { id: payload.id });
   });
@@ -82,7 +82,7 @@ io.on("connection", (socket) => {
   socket.on("chat:clear-mine", () => {
     const history = roomMessages.get(roomId) ?? [];
     const remaining = history.filter((item) => item.senderId !== authorId);
-    const deletedIds = history.filter((item) => item.senderId === socket.id).map((item) => item.id);
+    const deletedIds = history.filter((item) => item.senderId === authorId).map((item) => item.id);
     roomMessages.set(roomId, remaining);
     if (deletedIds.length) io.to(roomId).emit("chat:messages-deleted", { ids: deletedIds });
   });
