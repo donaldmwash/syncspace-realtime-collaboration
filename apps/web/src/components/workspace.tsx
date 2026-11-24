@@ -318,8 +318,11 @@ export function Workspace() {
     const query = memberQuery.trim().replace(/^@/, "");
     const { data, error } = await supabase.from("profiles").select("id,username,display_name,avatar_url").neq("id", user?.id ?? "").ilike("username", query + "%").limit(10);
     if (error) setNotice(error.message);
-    setMemberResults(data ?? []);
-    if (!data?.length) setNotice("No matching usernames found. Members need to set a username in their profile first.");
+    const { data: blocks } = await supabase.from("user_blocks").select("blocked_id").eq("blocker_id", user?.id ?? "");
+    const blockedIds = new Set((blocks ?? []).map((item: any) => item.blocked_id));
+    const visible = (data ?? []).filter((item: any) => !blockedIds.has(item.id));
+    setMemberResults(visible);
+    if (!visible.length) setNotice("No matching usernames found, or matching users are blocked. Members need a username to be found.");
   }
 
   async function addMember(memberId: string) {
@@ -329,6 +332,23 @@ export function Workspace() {
     else setNotice("Member added to the conversation.");
   }
 
+
+
+  async function blockMember(memberId: string) {
+    if (!supabase || !user) return;
+    if (!window.confirm("Block this person from your SyncSpace discovery list?")) return;
+    const { error } = await supabase.from("user_blocks").insert({ blocker_id: user.id, blocked_id: memberId });
+    if (error) setNotice(error.code === "23505" ? "This person is already blocked." : error.message);
+    else { setMemberResults((current) => current.filter((member) => member.id !== memberId)); setNotice("Person blocked from your discovery list."); }
+  }
+
+  async function reportMember(memberId: string) {
+    if (!supabase || !user) return;
+    const reason = window.prompt("Briefly explain why you are reporting this account:");
+    if (!reason?.trim()) return;
+    const { error } = await supabase.from("user_reports").insert({ reporter_id: user.id, reported_user_id: memberId, reason: reason.trim().slice(0, 1000) });
+    setNotice(error ? error.message : "Report submitted for review.");
+  }
 
   async function startDirect(member: any) {
     if (!supabase || !user) return;
@@ -675,7 +695,7 @@ export function Workspace() {
       {showPoll && <div style={modalStyle}><form onSubmit={createPoll} style={{ ...panel, width: "min(100%, 480px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Create a poll</h2><input value={pollQuestion} onChange={(e) => setPollQuestion(e.target.value)} maxLength={500} required placeholder="Ask a question" style={inputStyle} /><textarea value={pollOptions} onChange={(e) => setPollOptions(e.target.value)} rows={5} placeholder={"One answer per line\nOption 2"} style={{ ...inputStyle, resize: "vertical" }} /><label style={{ display: "flex", gap: 8, alignItems: "center", color: "#cbd8ec", fontSize: 13 }}><input type="checkbox" checked={pollMultiple} onChange={(e) => setPollMultiple(e.target.checked)} /> Allow multiple answers</label><small style={{ color: "#8193b1" }}>Add 2–10 options, one per line. Votes are visible to conversation members.</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowPoll(false)} style={secondaryButton}>Cancel</button><button disabled={busy} style={primaryButton}>Share poll</button></div></form></div>}
       {showCreate && <div style={modalStyle}><form onSubmit={createConversation} style={{ ...panel, width: "min(100%, 440px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Create a conversation</h2><div style={{ display: "flex", gap: 8 }}><button type="button" onClick={() => setNewType("group")} style={{ ...secondaryButton, flex: 1, background: newType === "group" ? "#20365c" : "transparent" }}>Group</button><button type="button" onClick={() => setNewType("channel")} style={{ ...secondaryButton, flex: 1, background: newType === "channel" ? "#20365c" : "transparent" }}>Channel</button></div><input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder={newType === "group" ? "Group name" : "Channel name"} maxLength={100} required style={inputStyle} /><p style={{ color: "#8193b1", fontSize: 12 }}>{newType === "channel" ? "Channels are announcement-first spaces. Only owners and admins can post." : "Groups are private. Add people by their SyncSpace username after creation."}</p><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowCreate(false)} style={secondaryButton}>Cancel</button><button disabled={busy} style={primaryButton}>Create</button></div></form></div>}
 
-      {showMembers && activeConversation && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 480px)", padding: 22 }}><h2 style={{ marginTop: 0 }}>Add members</h2><p style={{ color: "#8193b1", fontSize: 13 }}>Search by exact or partial username. People must set a username in their profile to be found.</p><form onSubmit={findMembers} style={{ display: "flex", gap: 8 }}><input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="@username" style={inputStyle} /><button style={primaryButton}>Find</button></form><div style={{ display: "grid", gap: 8, marginTop: 14 }}>{memberResults.map((member) => <div key={member.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 10, background: "#14233a", borderRadius: 8 }}><span>{member.display_name} <small style={{ color: "#8193b1" }}>@{member.username}</small></span><div style={{ display: "flex", gap: 6 }}><button onClick={() => void addMember(member.id)} style={secondaryButton}>Add</button><button onClick={() => void startDirect(member)} style={secondaryButton}>Message</button></div></div>)}</div><button onClick={() => setShowMembers(false)} style={{ ...secondaryButton, width: "100%", marginTop: 14 }}>Close</button></section></div>}
+      {showMembers && activeConversation && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 480px)", padding: 22 }}><h2 style={{ marginTop: 0 }}>Add members</h2><p style={{ color: "#8193b1", fontSize: 13 }}>Search by exact or partial username. People must set a username in their profile to be found.</p><form onSubmit={findMembers} style={{ display: "flex", gap: 8 }}><input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="@username" style={inputStyle} /><button style={primaryButton}>Find</button></form><div style={{ display: "grid", gap: 8, marginTop: 14 }}>{memberResults.map((member) => <div key={member.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 10, background: "#14233a", borderRadius: 8 }}><span>{member.display_name} <small style={{ color: "#8193b1" }}>@{member.username}</small></span><div style={{ display: "flex", gap: 6 }}><button onClick={() => void addMember(member.id)} style={secondaryButton}>Add</button><button onClick={() => void startDirect(member)} style={secondaryButton}>Message</button><button onClick={() => void reportMember(member.id)} style={secondaryButton}>Report</button><button onClick={() => void blockMember(member.id)} style={secondaryButton}>Block</button></div></div>)}</div><button onClick={() => setShowMembers(false)} style={{ ...secondaryButton, width: "100%", marginTop: 14 }}>Close</button></section></div>}
 
       {showProfile && <div style={modalStyle}><form onSubmit={saveProfile} style={{ ...panel, width: "min(100%, 440px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Your profile</h2>{avatarUrl && <img src={avatarUrl} alt="Your profile" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: "50%" }} />}<label style={{ color: "#cbd8ec", fontSize: 13 }}>Profile picture<input type="file" accept="image/*" onChange={uploadAvatar} style={{ display: "block", marginTop: 7, color: "#aebfda" }} /></label><label style={{ color: "#cbd8ec", fontSize: 13 }}>Display name<input value={profileName} onChange={(e) => setProfileName(e.target.value)} maxLength={60} required style={{ ...inputStyle, marginTop: 6 }} /></label><label style={{ color: "#cbd8ec", fontSize: 13 }}>Username<input value={profileUsername} onChange={(e) => setProfileUsername(e.target.value)} maxLength={24} placeholder="your_username" style={{ ...inputStyle, marginTop: 6 }} /></label><small style={{ color: "#8193b1" }}>Username must be unique and 3–24 letters, numbers or underscores. Email: {user.email}</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowProfile(false)} style={secondaryButton}>Cancel</button><button style={primaryButton}>Save profile</button></div></form></div>}
     </main>
