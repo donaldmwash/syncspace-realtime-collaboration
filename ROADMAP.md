@@ -30,9 +30,11 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [x] Private group and announcement-channel creation.
 - [x] Basic member discovery and owner/admin/member role storage.
 - [x] Channel posting restricted to owners/admins by database policy.
-- [ ] Invite links/QR codes with expiry, revocation and use limits.
+- [x] Invite links with expiry, revocation and use limits; redemption is JWT-verified through a Supabase Edge Function.
+- [ ] QR-code rendering for invite links.
 - [ ] Full role/permission management UI, member removal and ownership transfer.
-- [ ] Topic-based discussions and channel broadcast/subscription management.
+- [x] Topic labels and topic-scoped message creation.
+- [ ] Channel broadcast/subscription management.
 - [~] Message pinning and Saved Messages insertion exist; dedicated management/browsing screens and forwarding remain outstanding.
 
 ## Phase 3 — Everyday messaging
@@ -44,12 +46,14 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [x] Image, video, audio and file uploads with private storage and previews.
 - [ ] Voice-note recording/playback UX, albums, contact/location/live-location sharing and link previews.
 - [ ] Draft synchronization, folders, mentions and shared-media browser.
-- [ ] Poll creation/voting and scheduled-message delivery.
+- [x] Poll creation/voting with single-choice enforcement in the database.
+- [x] Scheduled text messages with an active one-minute Supabase Cron dispatcher.
 
 ## Phase 4 — Privacy and community safety
 
-- [ ] Disappearing messages and expiring status updates.
-- [ ] Block/report flows, spam protection, admin moderation and audit trails.
+- [x] 24-hour image/video status updates with contact-scoped storage and automatic cleanup.
+- [ ] Disappearing messages within conversations.
+- [~] Account blocking and report submission are implemented; report review queues, spam protection, admin moderation and audit trails remain outstanding.
 - [ ] Session/device management and privacy settings.
 - [ ] Backup/export and account recovery hardening.
 - [ ] Encryption design review; do not claim end-to-end encryption until independently tested.
