@@ -476,23 +476,25 @@ export function Workspace() {
     setBusy(true);
     const exported: any[] = [];
     const pageSize = 500;
+    let truncated = false;
     for (let from = 0; from < 10000; from += pageSize) {
       const { data, error } = await supabase.from("messages")
         .select("id,sender_id,body,message_type,reply_to_id,forwarded_from_id,topic_id,created_at,edited_at,deleted_at,attachments(file_name,mime_type,size_bytes,object_path)")
-        .eq("conversation_id", activeConversation.id).order("created_at", { ascending: true }).range(from, from + pageSize - 1);
+        .eq("conversation_id", activeConversation.id).order("created_at", { ascending: true }).order("id", { ascending: true }).range(from, from + pageSize - 1);
       if (error) { setNotice(error.message); setBusy(false); return; }
       exported.push(...(data ?? []));
       if (!data || data.length < pageSize) break;
+      if (from + pageSize >= 10000) truncated = true;
     }
-    const payload = { format: "syncspace-conversation-export-v1", exported_at: new Date().toISOString(), conversation: { id: activeConversation.id, title: activeConversation.title, type: activeConversation.type }, message_count: exported.length, attachment_note: "Attachment metadata and private object paths are included; file bytes are not embedded.", messages: exported };
+    const payload = { format: "syncspace-conversation-export-v1", exported_at: new Date().toISOString(), conversation: { id: activeConversation.id, title: activeConversation.title, type: activeConversation.type }, message_count: exported.length, truncated, attachment_note: "Attachment metadata and private object paths are included; file bytes are not embedded.", messages: exported };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = "syncspace-" + (activeConversation.title || "conversation").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + "-export.json";
-    document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
+    document.body.appendChild(anchor); anchor.click(); anchor.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     setBusy(false);
-    setNotice("Exported " + exported.length + " messages. Attachment file contents are not included.");
+    setNotice("Exported " + exported.length + " messages" + (truncated ? " (10,000-message export limit reached)" : "") + ". Attachment file contents are not included.");
   }
 
   async function openChannelAnalytics() {
