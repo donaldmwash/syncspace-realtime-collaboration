@@ -21,6 +21,7 @@ The `feature/syncspace-2-auth-foundation` branch connects the web client to the 
 - Full-text search, @username mention inbox, per-conversation unread counts and database-enforced message rate limiting.
 - Conversation-history JSON export (attachment metadata only) and device registration with sign-out-other-sessions.
 - Browser microphone recording and delivery of voice messages.
+- Shareable SyncSpace contact cards for members in the current conversation.
 - User-initiated one-time location sharing through a Maps link.
 - Group/channel invite links with 7-day expiry, a 50-join cap, revocation and JWT-verified Edge Function redemption.
 - Topic labels, single/multiple-choice polls with database-enforced single-choice voting, scheduled text delivery via an active one-minute database job, basic channel analytics for admins and conversation-history export.
@@ -28,11 +29,11 @@ The `feature/syncspace-2-auth-foundation` branch connects the web client to the 
 - 24-hour image/video status updates with contact-scoped private media and automatic expiry cleanup.
 - Account blocking (direct-message restrictions and hidden blocked-user messages) and report submission.
 
-Some controls are intentionally not presented as finished features yet: QR invite rendering, granular channel permissions, contact cards, live location sharing and link previews, full report moderation, push notifications, WebRTC calls, bots, full device/session administration, complete backup/restore and end-to-end encryption remain outstanding. Automated and multi-account acceptance testing is also required before production release.
+Some controls are intentionally not presented as finished features yet: QR invite rendering, granular channel permissions, live location sharing and link previews, full report moderation, push notifications, WebRTC calls, bots, full device/session administration, complete backup/restore and end-to-end encryption remain outstanding. Automated and multi-account acceptance testing is also required before production release.
 
 ## Database migrations
 
-Schema changes for full-text search, message mentions, direct-message block enforcement, public channel subscriptions, unread counters, message rate limiting, consolidated member-insert policies and secure conversation ownership transfer are tracked under `supabase/migrations`. Apply migrations in timestamp order to a new Supabase project after the baseline schema has been provisioned.
+Schema changes for full-text search, message mentions, direct-message block enforcement, public channel subscriptions, unread counters, message rate limiting, consolidated member-insert policies, secure conversation ownership transfer and contact-card message types are tracked under `supabase/migrations`. Apply migrations in timestamp order to a new Supabase project after the baseline schema has been provisioned.
 
 ## Local setup
 
