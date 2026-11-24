@@ -1,347 +1,186 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import * as Y from "yjs";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 
 const REALTIME_URL =
   process.env.NEXT_PUBLIC_REALTIME_URL || "http://localhost:4000";
 const ROOM_ID = "public-demo";
 
-export function Workspace() {
-  const editorRef = useRef<HTMLTextAreaElement>(null);
-  const docRef = useRef<Y.Doc | null>(null);
-  const socketRef = useRef<Socket | null>(null);
-  const applyingRemote = useRef(false);
+type ChatMessage = {
+  id: string;
+  sender: string;
+  senderId: string;
+  text: string;
+  createdAt: string;
+};
 
+export function Workspace() {
+  const [name, setName] = useState("");
+  const [nameInput, setNameInput] = useState("");
+  const [joined, setJoined] = useState(false);
   const [connected, setConnected] = useState(false);
-  const [peers, setPeers] = useState(1);
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState(
-    "Your changes sync live with everyone in this room.",
-  );
+  const [participants, setParticipants] = useState(1);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [draft, setDraft] = useState("");
+  const [notice, setNotice] = useState("Choose a display name to join the conversation.");
+  const socketRef = useRef<Socket | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const doc = new Y.Doc();
-    docRef.current = doc;
-    const content = doc.getText("content");
+    const savedName = window.localStorage.getItem("syncspace-display-name");
+    if (savedName) setNameInput(savedName);
+  }, []);
+
+  useEffect(() => {
+    if (!joined || !name) return;
+
     const socket = io(REALTIME_URL, {
       transports: ["websocket"],
-      auth: { roomId: ROOM_ID, displayName: "Guest editor" },
+      auth: { roomId: ROOM_ID, displayName: name },
       reconnection: true,
     });
     socketRef.current = socket;
 
-    function render() {
-      const editor = editorRef.current;
-      if (!editor) return;
-
-      const nextValue = content.toString();
-      if (editor.value === nextValue) return;
-
-      // Preserve the current caret/selection while applying remote edits.
-      const selectionStart = editor.selectionStart;
-      const selectionEnd = editor.selectionEnd;
-      editor.value = nextValue;
-      const safeStart = Math.min(selectionStart, nextValue.length);
-      const safeEnd = Math.min(selectionEnd, nextValue.length);
-      editor.setSelectionRange(safeStart, safeEnd);
-    }
-
     socket.on("connect", () => {
       setConnected(true);
-      // Send any edits made while disconnected so the server can merge them.
-      socket.emit("doc:update", Array.from(Y.encodeStateAsUpdate(doc)));
+      setNotice("You're connected. Say hello!");
     });
-    socket.on("disconnect", () => setConnected(false));
-
-    socket.on("sync:init", (update: number[]) => {
-      applyingRemote.current = true;
-      Y.applyUpdate(doc, new Uint8Array(update), "remote");
-      applyingRemote.current = false;
-      render();
+    socket.on("disconnect", () => {
+      setConnected(false);
+      setNotice("Connection lost. Reconnecting…");
     });
-
-    socket.on("doc:update", (update: number[]) => {
-      applyingRemote.current = true;
-      Y.applyUpdate(doc, new Uint8Array(update), "remote");
-      applyingRemote.current = false;
-      render();
+    socket.on("chat:history", (history: ChatMessage[]) => {
+      setMessages(Array.isArray(history) ? history : []);
     });
-
-    socket.on("presence:count", (count: number) => setPeers(count));
-
-    doc.on("update", (update: Uint8Array, origin: unknown) => {
-      if (origin !== "remote" && socket.connected) {
-        socket.emit("doc:update", Array.from(update));
-      }
+    socket.on("chat:message", (message: ChatMessage) => {
+      setMessages((current) =>
+        current.some((item) => item.id === message.id)
+          ? current
+          : [...current, message].slice(-200),
+      );
     });
-    content.observe(render);
+    socket.on("presence:count", (count: number) => setParticipants(count));
 
     return () => {
       socket.disconnect();
-      doc.destroy();
-      docRef.current = null;
       socketRef.current = null;
     };
-  }, []);
+  }, [joined, name]);
 
-  function onInput() {
-    const editor = editorRef.current;
-    const doc = docRef.current;
-    if (applyingRemote.current || !editor || !doc) return;
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages]);
 
-    const ytext = doc.getText("content");
-    const previous = ytext.toString();
-    const next = editor.value;
-
-    // Apply only the changed middle section instead of replacing the full
-    // document on every keystroke. This preserves Yjs's concurrent-edit model.
-    let prefix = 0;
-    while (
-      prefix < previous.length &&
-      prefix < next.length &&
-      previous[prefix] === next[prefix]
-    ) {
-      prefix += 1;
+  function joinChat(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const cleanName = nameInput.trim().replace(/\s+/g, " ").slice(0, 32);
+    if (!cleanName) {
+      setNotice("Please enter the name you want other participants to see.");
+      return;
     }
-
-    let suffix = 0;
-    while (
-      suffix < previous.length - prefix &&
-      suffix < next.length - prefix &&
-      previous[previous.length - 1 - suffix] ===
-        next[next.length - 1 - suffix]
-    ) {
-      suffix += 1;
-    }
-
-    const deleteCount = previous.length - prefix - suffix;
-    const insertion = next.slice(prefix, next.length - suffix);
-
-    if (deleteCount === 0 && insertion.length === 0) return;
-
-    doc.transact(() => {
-      if (deleteCount > 0) ytext.delete(prefix, deleteCount);
-      if (insertion.length > 0) ytext.insert(prefix, insertion);
-    }, "human");
+    window.localStorage.setItem("syncspace-display-name", cleanName);
+    setName(cleanName);
+    setJoined(true);
   }
 
-  async function askAI() {
-    const doc = docRef.current;
-    if (!doc) return;
-
-    setBusy(true);
-    setNotice("AI is preparing a document edit…");
-    try {
-      const response = await fetch("/api/ai-edit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: doc.getText("content").toString() }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "AI request failed");
-
-      const ytext = doc.getText("content");
-      doc.transact(() => ytext.insert(ytext.length, data.insertion), "ai");
-      setNotice(
-        "AI inserted content through a Yjs transaction. Connected editors receive the same update.",
-      );
-    } catch (error) {
-      setNotice(
-        error instanceof Error ? error.message : "AI edit failed.",
-      );
-    } finally {
-      setBusy(false);
-    }
+  function sendMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const text = draft.trim();
+    const socket = socketRef.current;
+    if (!text || !socket?.connected) return;
+    socket.emit("chat:send", { text });
+    setDraft("");
   }
 
-  async function shareRoom() {
+  async function shareChat() {
     try {
       await navigator.clipboard.writeText(window.location.href);
-      setNotice("Room link copied. Anyone with the link can edit this shared room.");
+      setNotice("Chat link copied. Send it to your friends.");
     } catch {
-      setNotice("Copy the page URL from your browser and send it to your participants.");
+      setNotice("Copy this page's URL and send it to your friends.");
     }
+  }
+
+  function changeName() {
+    socketRef.current?.disconnect();
+    setJoined(false);
+    setConnected(false);
+    setMessages([]);
+    setName("");
+    setNotice("Choose a display name to join the conversation.");
   }
 
   return (
-    <main style={{ maxWidth: 1100, margin: "0 auto", padding: "48px 24px" }}>
-      <header
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: 16,
-          flexWrap: "wrap",
-          marginBottom: 38,
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 13, letterSpacing: 3, color: "#8ea7d7" }}>
-            SYNCSPACE / LIVE DOCUMENT
+    <main style={{ minHeight: "100vh", padding: "32px 16px 48px" }}>
+      <div style={{ maxWidth: 900, margin: "0 auto" }}>
+        <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
+          <div>
+            <div style={{ color: "#8ea7d7", fontSize: 12, letterSpacing: 3 }}>SYNCSPACE COMMUNITY</div>
+            <h1 style={{ fontSize: 30, margin: "8px 0 4px" }}>The conversation room</h1>
+            <p style={{ color: "#91a2bd", margin: 0, fontSize: 14 }}>A place for you and your friends to chat in real time.</p>
           </div>
-          <h1 style={{ fontSize: 30, margin: "8px 0" }}>
-            Think together. Build together.
-          </h1>
-        </div>
-        <div
-          role="status"
-          style={{
-            border: "1px solid #26334b",
-            borderRadius: 30,
-            padding: "10px 16px",
-            fontSize: 13,
-            color: connected ? "#8ce0b0" : "#f3c77a",
-          }}
-        >
-          ● {connected ? "Connected" : "Connecting"} · {peers} participant
-          {peers === 1 ? "" : "s"}
-        </div>
-      </header>
+          <div role="status" style={{ border: "1px solid #26334b", borderRadius: 30, padding: "10px 14px", color: connected ? "#8ce0b0" : "#f3c77a", fontSize: 13 }}>
+            ● {joined ? (connected ? "Online" : "Connecting…") : "Not joined"} · {participants} here
+          </div>
+        </header>
 
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) 280px",
-          gap: 20,
-        }}
-      >
-        <div
-          style={{
-            background: "#101a2b",
-            border: "1px solid #26334b",
-            borderRadius: 18,
-            padding: 28,
-            minHeight: 480,
-          }}
-        >
-          <div
-            style={{
-              fontSize: 12,
-              color: "#8095b8",
-              letterSpacing: 2,
-              marginBottom: 20,
-            }}
-          >
-            SHARED CANVAS / EVERYONE CAN EDIT
-          </div>
-          <textarea
-            ref={editorRef}
-            aria-label="Shared document"
-            onInput={onInput}
-            placeholder="Start writing here. Everyone in this room can edit this document…"
-            spellCheck
-            style={{
-              display: "block",
-              width: "100%",
-              minHeight: 350,
-              resize: "vertical",
-              boxSizing: "border-box",
-              whiteSpace: "pre-wrap",
-              overflowWrap: "anywhere",
-              fontFamily: "inherit",
-              fontSize: 17,
-              lineHeight: 1.8,
-              color: "#e7eefb",
-              background: "transparent",
-              border: 0,
-              outline: "none",
-            }}
-          />
-          <div
-            style={{
-              borderTop: "1px solid #26334b",
-              marginTop: 22,
-              paddingTop: 14,
-              fontSize: 12,
-              color: "#7f91ae",
-            }}
-          >
-            Changes are synchronised as Yjs document updates.
-          </div>
-        </div>
-
-        <aside
-          style={{
-            background: "#101a2b",
-            border: "1px solid #26334b",
-            borderRadius: 18,
-            padding: 20,
-            height: "fit-content",
-          }}
-        >
-          <div style={{ fontSize: 12, color: "#8095b8", letterSpacing: 2 }}>
-            COLLABORATION
-          </div>
-          <h2 style={{ fontSize: 20, margin: "12px 0" }}>Invite your team</h2>
-          <p style={{ fontSize: 13, color: "#a8b6ce", lineHeight: 1.7 }}>
-            Share this room link with your participants. Everyone who opens it
-            can edit the same document in real time.
-          </p>
-          <button
-            onClick={shareRoom}
-            style={{
-              width: "100%",
-              padding: 13,
-              border: 0,
-              borderRadius: 10,
-              background: "#86a8ff",
-              color: "#081020",
-              fontWeight: 700,
-              marginTop: 12,
-              cursor: "pointer",
-            }}
-          >
-            Copy participant link
-          </button>
-
-          <div style={{ borderTop: "1px solid #26334b", marginTop: 18, paddingTop: 16 }}>
-            <div style={{ fontSize: 12, color: "#8095b8", letterSpacing: 2 }}>
-              AI PARTICIPANT
+        {!joined ? (
+          <section style={{ maxWidth: 480, margin: "70px auto", background: "#101a2b", border: "1px solid #26334b", borderRadius: 20, padding: 28 }}>
+            <div style={{ fontSize: 12, color: "#8ea7d7", letterSpacing: 2 }}>JOIN THE CHAT</div>
+            <h2 style={{ fontSize: 24, margin: "12px 0" }}>What should we call you?</h2>
+            <p style={{ color: "#a8b6ce", fontSize: 14, lineHeight: 1.7 }}>Your display name will appear above every message you send, so everyone knows who is speaking.</p>
+            <form onSubmit={joinChat}>
+              <label htmlFor="display-name" style={{ display: "block", color: "#c4d0e4", fontSize: 13, marginBottom: 8 }}>Your name</label>
+              <input id="display-name" value={nameInput} onChange={(event) => setNameInput(event.target.value)} maxLength={32} placeholder="e.g. Donald" autoComplete="nickname" required style={{ width: "100%", padding: 14, borderRadius: 10, border: "1px solid #354663", background: "#0a1220", color: "#e7eefb", outline: "none" }} />
+              <button type="submit" style={{ width: "100%", marginTop: 14, padding: 14, border: 0, borderRadius: 10, background: "#86a8ff", color: "#081020", fontWeight: 700 }}>Enter chat</button>
+            </form>
+            <p style={{ color: "#8294b1", fontSize: 12, marginTop: 16 }}>{notice}</p>
+          </section>
+        ) : (
+          <section style={{ background: "#101a2b", border: "1px solid #26334b", borderRadius: 20, overflow: "hidden" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "16px 20px", borderBottom: "1px solid #26334b", flexWrap: "wrap" }}>
+              <div>
+                <strong style={{ color: "#e7eefb" }}>Community chat</strong>
+                <div style={{ color: "#8294b1", fontSize: 12, marginTop: 4 }}>Signed in as {name} · {participants} participant{participants === 1 ? "" : "s"}</div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={shareChat} style={{ padding: "9px 12px", border: "1px solid #354663", borderRadius: 9, background: "transparent", color: "#cbd8ec" }}>Share chat</button>
+                <button onClick={changeName} style={{ padding: "9px 12px", border: "1px solid #354663", borderRadius: 9, background: "transparent", color: "#cbd8ec" }}>Change name</button>
+              </div>
             </div>
-            <p style={{ fontSize: 13, color: "#a8b6ce", lineHeight: 1.7 }}>
-              Ask AI to add a concise summary to the shared document.
-            </p>
-            <button
-              disabled={busy}
-              onClick={askAI}
-              style={{
-                width: "100%",
-                padding: 13,
-                border: 0,
-                borderRadius: 10,
-                background: busy ? "#52627f" : "#86a8ff",
-                color: "#081020",
-                fontWeight: 700,
-                marginTop: 8,
-                cursor: busy ? "wait" : "pointer",
-              }}
-            >
-              {busy ? "Working…" : "@AI Insert summary"}
-            </button>
-          </div>
 
-          <p
-            aria-live="polite"
-            style={{ fontSize: 12, color: "#8ea2c4", lineHeight: 1.6, marginTop: 16 }}
-          >
-            {notice}
-          </p>
-          <div style={{ borderTop: "1px solid #26334b", marginTop: 18, paddingTop: 16, fontSize: 12, color: "#8294b1" }}>
-            ROOM: <strong style={{ color: "#dbe6f8" }}>{ROOM_ID}</strong>
-            <br />
-            Guest access · no registration
-            <br />
-            Anyone with the link can edit. Do not put confidential information here.
-          </div>
-        </aside>
-      </section>
+            <div aria-live="polite" style={{ height: "min(62vh, 620px)", minHeight: 360, overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
+              {messages.length === 0 ? (
+                <div style={{ margin: "auto", textAlign: "center", color: "#8294b1", maxWidth: 300 }}>
+                  <div style={{ fontSize: 30, marginBottom: 10 }}>💬</div>
+                  <strong style={{ color: "#dbe6f8" }}>The room is open</strong>
+                  <p style={{ fontSize: 13, lineHeight: 1.6 }}>Send the first message and start the conversation.</p>
+                </div>
+              ) : messages.map((message) => {
+                const mine = message.senderId === socketRef.current?.id;
+                return (
+                  <article key={message.id} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "min(78%, 600px)", minWidth: 120 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, margin: "0 4px 6px" }}>
+                      <strong style={{ color: mine ? "#9db8ff" : "#8ce0b0", fontSize: 12 }}>{message.sender}{mine ? " (you)" : ""}</strong>
+                      <time style={{ color: "#7184a3", fontSize: 10 }}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
+                    </div>
+                    <div style={{ background: mine ? "#20365c" : "#1a2940", color: "#e7eefb", borderRadius: 14, padding: "11px 14px", lineHeight: 1.6, fontSize: 14, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{message.text}</div>
+                  </article>
+                );
+              })}
+              <div ref={bottomRef} />
+            </div>
 
-      <footer style={{ marginTop: 34, color: "#657895", fontSize: 12 }}>
-        A shared collaborative document workspace with Yjs conflict-free
-        synchronisation.
-      </footer>
+            <form onSubmit={sendMessage} style={{ display: "flex", gap: 10, padding: 16, borderTop: "1px solid #26334b", background: "#0d1727" }}>
+              <input value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={2000} placeholder={connected ? "Write a message…" : "Reconnecting…"} disabled={!connected} aria-label="Message" style={{ flex: 1, minWidth: 0, padding: 14, borderRadius: 10, border: "1px solid #354663", background: "#101a2b", color: "#e7eefb", outline: "none" }} />
+              <button type="submit" disabled={!connected || !draft.trim()} style={{ padding: "0 20px", border: 0, borderRadius: 10, background: connected && draft.trim() ? "#86a8ff" : "#465675", color: "#081020", fontWeight: 700 }}>Send</button>
+            </form>
+            <div style={{ padding: "0 18px 12px", color: "#7184a3", fontSize: 11 }}>{notice} · Messages are currently kept in temporary server memory.</div>
+          </section>
+        )}
+        <footer style={{ color: "#657895", fontSize: 12, marginTop: 20, textAlign: "center" }}>SYNCSPACE · Community chat · Room: {ROOM_ID}</footer>
+      </div>
     </main>
   );
 }
