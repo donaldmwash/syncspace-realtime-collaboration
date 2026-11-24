@@ -1,0 +1,5 @@
+[functions.redeem-invite]
+verify_jwt = true
+
+[functions.cleanup-expired-media]
+verify_jwt = false
