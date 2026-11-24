@@ -4,54 +4,64 @@ This tracker distinguishes database groundwork from user-facing, tested function
 
 ## Current production baseline
 
-- [x] Existing public realtime room, display names, message edit/delete, replies and 5 MB attachments (temporary in-memory storage).
+- [x] Existing Socket.IO public room remains available in the realtime service for the legacy frontend.
 - [x] Dedicated Supabase project created in the existing organisation (London region).
-- [x] Initial relational schema and row-level security for accounts/profiles, conversations, memberships, messages, attachments, reactions and read/delivery receipts.
-- [x] Additional schema groundwork for invites, pinned messages, Saved Messages, topics, polls, scheduled messages, blocks/reports, 24-hour statuses, call records, devices, drafts, folders and mentions.
-- [x] Security advisor returned no findings after the schema changes.
-- [ ] The current web app and realtime service are not yet connected to Supabase Auth or database persistence.
-- [ ] Existing public chat still uses guest identities and in-memory messages/files. Do not treat it as a private or durable messaging service.
+- [x] Relational schema and RLS groundwork for profiles, conversations, members, messages, attachments, reactions, receipts and the extended feature set.
+- [x] Supabase security advisor currently reports no findings.
+- [x] Authenticated Supabase-backed web workspace is implemented on `feature/syncspace-2-auth-foundation`.
+- [ ] The new authenticated workspace has not been promoted to the production alias.
+- [ ] Existing in-memory guest-room messages/files have not been migrated; they are not available to the new authenticated workspace.
 
-## Implementation phases
+## Phase 1 — Identity, persistence and access control
 
-### Phase 1 — Identity, persistence and access control
-- [ ] Supabase Auth signup, login, logout, email verification and password reset.
-- [ ] Profile editing, usernames, avatar upload and account settings.
-- [ ] Verify user JWTs in the realtime service; remove trust in client-supplied author IDs and display names.
-- [ ] Persist messages, replies, edits, deletions, memberships and receipts in Postgres.
-- [ ] Private storage bucket for attachments with membership-checked downloads.
-- [ ] Migrate the existing public room without losing the currently running experience.
-- [ ] Cross-browser and multi-user integration tests.
+- [x] Email/password signup, sign-in, sign-out and session persistence.
+- [x] Email-confirmation redirect and password-reset request/recovery UI.
+- [x] Profile editing, unique usernames and profile-picture upload.
+- [x] Persist messages, replies, sender edits/deletes and read receipts in Postgres.
+- [x] Private Storage bucket for conversation attachments with membership-checked reads and uploader-scoped writes.
+- [x] Database trigger creates a profile and adds each new account to the shared Community Lounge.
+- [~] Realtime delivery uses Supabase Realtime with authenticated client sessions. The old Socket.IO service still has its original guest identity path and is not used by the new web workspace.
+- [ ] Cross-browser, multi-account and failure-recovery integration tests.
+- [ ] Production Auth redirect allowlist and final production environment configuration.
 
-### Phase 2 — Direct messages, groups and channels
-- [ ] One-to-one conversations and user discovery.
-- [ ] Group and channel creation, roles, permissions and member management.
-- [ ] Invite links with expiry/revocation and optional use limits.
-- [ ] Announcements, broadcast channels and topic-based group discussions.
-- [ ] Message forwarding, pinning and Saved Messages.
+## Phase 2 — Direct messages, groups and channels
 
-### Phase 3 — Everyday messaging
-- [ ] Emoji reactions, typing indicators, online/last-seen privacy and presence.
-- [ ] Sent/delivered/read receipts and unread counts.
-- [ ] Message search, mentions, drafts, folders and shared-media/file views.
-- [ ] Image/video/document previews, albums, voice notes and larger uploads.
-- [ ] Link previews and contact/location sharing.
-- [ ] Polls and scheduled messages.
+- [x] One-to-one conversation creation from username discovery.
+- [x] Private group and announcement-channel creation.
+- [x] Basic member discovery and owner/admin/member role storage.
+- [x] Channel posting restricted to owners/admins by database policy.
+- [ ] Invite links/QR codes with expiry, revocation and use limits.
+- [ ] Full role/permission management UI, member removal and ownership transfer.
+- [ ] Topic-based discussions and channel broadcast/subscription management.
+- [~] Message pinning and Saved Messages insertion exist; dedicated management/browsing screens and forwarding remain outstanding.
 
-### Phase 4 — Privacy and community safety
-- [ ] Disappearing messages and status updates with expiry.
-- [ ] Block/report, spam protection, admin moderation and audit trails.
+## Phase 3 — Everyday messaging
+
+- [x] Emoji reactions.
+- [x] Typing indicators and online presence in an open conversation.
+- [x] Read receipts.
+- [~] Search currently filters the most recent 300 loaded messages; server-side full-history search and unread counters remain outstanding.
+- [x] Image, video, audio and file uploads with private storage and previews.
+- [ ] Voice-note recording/playback UX, albums, contact/location/live-location sharing and link previews.
+- [ ] Draft synchronization, folders, mentions and shared-media browser.
+- [ ] Poll creation/voting and scheduled-message delivery.
+
+## Phase 4 — Privacy and community safety
+
+- [ ] Disappearing messages and expiring status updates.
+- [ ] Block/report flows, spam protection, admin moderation and audit trails.
 - [ ] Session/device management and privacy settings.
-- [ ] Backup/export and account recovery.
+- [ ] Backup/export and account recovery hardening.
 - [ ] Encryption design review; do not claim end-to-end encryption until independently tested.
 
-### Phase 5 — Calls, automation and operations
+## Phase 5 — Calls, automation and operations
+
 - [ ] WebRTC audio/video calls with signaling, TURN/STUN and reconnect handling.
-- [ ] Notifications and multi-device synchronization.
+- [ ] Push notifications and multi-device synchronization.
 - [ ] Bot/automation API with scoped permissions and abuse controls.
 - [ ] Channel analytics and operational dashboards.
 - [ ] Load, security, accessibility and disaster-recovery testing.
 
 ## Release rule
 
-A feature is only marked complete after its frontend, backend, authorization, persistence (where applicable), failure states and relevant automated/manual tests are implemented. Database schema alone is foundation work, not feature completion.
+A feature is only marked complete after its frontend, backend, authorization, persistence (where applicable), failure states and relevant automated/manual tests are implemented. Database schema alone is foundation work, not feature completion. The current branch has a successful Vercel preview build, but live multi-user acceptance tests are still required before production release.
