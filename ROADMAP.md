@@ -32,7 +32,7 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [x] Member discovery, add/remove, owner/admin/moderator/member role management.
 - [x] Channel posting restricted to owners/admins by database policy.
 - [x] Invite links with expiry, revocation and use limits; redemption is JWT-verified through a Supabase Edge Function.
-- [ ] QR-code rendering for invite links.
+- [x] Locally generated, downloadable QR codes for conversation invite links.
 - [x] Owner-only group/channel ownership transfer through a security-definer RPC, with realtime role refresh.
 - [ ] Granular per-action permissions.
 - [x] Topic labels and topic-scoped message creation.
