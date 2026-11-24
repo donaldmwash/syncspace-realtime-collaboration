@@ -15,6 +15,7 @@ type Conversation = {
   role?: string;
 };
 type ConversationTopic = { id: string; name: string; description: string | null };
+type StatusItem = { id: string; user_id: string; media_path: string; media_type: string | null; caption: string | null; expires_at: string; created_at: string; owner?: { display_name: string; avatar_url?: string | null }; signedUrl?: string };
 type Attachment = { id: string; file_name: string; mime_type: string | null; size_bytes: number; object_path: string; signedUrl?: string };
 type Poll = { id: string; question: string; allows_multiple: boolean; closes_at: string | null; poll_options: { id: string; label: string; position: number }[]; poll_votes: { option_id: string; user_id: string }[] };
 type Message = {
@@ -78,6 +79,12 @@ export function Workspace() {
   const [topicId, setTopicId] = useState("");
   const [showTopics, setShowTopics] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [statuses, setStatuses] = useState<StatusItem[]>([]);
+  const [showStatuses, setShowStatuses] = useState(false);
+  const [showAddStatus, setShowAddStatus] = useState(false);
+  const [activeStatusId, setActiveStatusId] = useState("");
+  const [statusFile, setStatusFile] = useState<File | null>(null);
+  const [statusCaption, setStatusCaption] = useState("");
   const [scheduleAt, setScheduleAt] = useState("");
   const [scheduledMessages, setScheduledMessages] = useState<{id:string;body:string;send_at:string}[]>([]);
   const [newTopicName, setNewTopicName] = useState("");
@@ -165,6 +172,7 @@ export function Workspace() {
       setProfileUsername(profile?.username ?? "");
       setAvatarUrl(profile?.avatar_url ?? "");
       await loadConversations(user);
+      await refreshStatuses();
     })();
   }, [user, supabase, loadConversations]);
 
@@ -218,6 +226,21 @@ export function Workspace() {
       else setScheduledMessages((data ?? []) as {id:string;body:string;send_at:string}[]);
     });
   }, [activeId, supabase]);
+
+
+  async function refreshStatuses() {
+    if (!supabase) return;
+    const { data, error } = await supabase.from("user_statuses")
+      .select("id,user_id,media_path,media_type,caption,expires_at,created_at,owner:profiles!user_statuses_user_id_fkey(display_name,avatar_url)")
+      .gt("expires_at", new Date().toISOString())
+      .order("created_at", { ascending: false });
+    if (error) { setNotice(error.message); return; }
+    const hydrated = await Promise.all((data ?? []).map(async (row: any) => {
+      const { data: signed } = await supabase.storage.from("statuses").createSignedUrl(row.media_path, 3600);
+      return { ...row, owner: Array.isArray(row.owner) ? row.owner[0] : row.owner, signedUrl: signed?.signedUrl } as StatusItem;
+    }));
+    setStatuses(hydrated);
+  }
 
   async function authenticate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -318,6 +341,30 @@ export function Workspace() {
     setNotice("Private conversation started with " + member.display_name + ".");
   }
 
+
+
+  async function createStatus(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !user || !statusFile) { setNotice("Choose an image or video first."); return; }
+    if (!statusFile.type.startsWith("image/") && !statusFile.type.startsWith("video/")) { setNotice("Status updates must be images or videos."); return; }
+    if (statusFile.size > 50 * 1024 * 1024) { setNotice("Status media must be 50 MB or smaller."); return; }
+    const safeName = statusFile.name.replace(/[^\w.\-() ]/g, "_").slice(0, 100) || "status";
+    const path = user.id + "/" + crypto.randomUUID() + "-" + safeName;
+    const { error: uploadError } = await supabase.storage.from("statuses").upload(path, statusFile, { contentType: statusFile.type, upsert: false });
+    if (uploadError) { setNotice(uploadError.message); return; }
+    const { error } = await supabase.from("user_statuses").insert({
+      user_id: user.id, media_path: path, media_type: statusFile.type,
+      caption: statusCaption.trim().slice(0, 500) || null,
+    });
+    if (error) {
+      await supabase.storage.from("statuses").remove([path]);
+      setNotice(error.message);
+      return;
+    }
+    setStatusFile(null); setStatusCaption(""); setShowAddStatus(false);
+    await refreshStatuses();
+    setNotice("Your status is live for 24 hours.");
+  }
 
   async function uploadAvatar(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -552,6 +599,7 @@ export function Workspace() {
             <button onClick={signOut} style={secondaryButton}>Sign out</button>
           </div>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search messages…" style={{ ...inputStyle, marginBottom: 12 }} />
+          <div style={{ display: "flex", gap: 7, margin: "4px 0 12px" }}><button onClick={() => setShowAddStatus(true)} style={{ ...secondaryButton, flex: 1 }}>＋ Add status</button><button onClick={() => { void refreshStatuses(); setShowStatuses(true); }} style={{ ...secondaryButton, flex: 1 }}>Status · {statuses.length}</button></div>
           <div style={{ color: "#7184a3", fontSize: 11, letterSpacing: 1.5, margin: "8px 0" }}>YOUR CONVERSATIONS</div>
           <div style={{ display: "grid", gap: 7, overflowY: "auto" }}>
             {conversations.map((conversation) => (
@@ -615,6 +663,9 @@ export function Workspace() {
       </div>
 
       {showPasswordRecovery && <div style={modalStyle}><form onSubmit={updateRecoveredPassword} style={{ ...panel, width: "min(100%, 420px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Choose a new password</h2><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} required placeholder="New password (8+ characters)" style={inputStyle} /><button disabled={busy} style={primaryButton}>Update password</button><p style={{ color: "#8193b1", fontSize: 12 }}>{notice}</p></form></div>}
+      {showAddStatus && <div style={modalStyle}><form onSubmit={createStatus} style={{ ...panel, width: "min(100%, 460px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Share a status</h2><input type="file" accept="image/*,video/*" onChange={(e) => setStatusFile(e.target.files?.[0] ?? null)} style={{ color: "#cbd8ec" }} /><textarea value={statusCaption} onChange={(e) => setStatusCaption(e.target.value)} maxLength={500} rows={3} placeholder="Add a caption (optional)" style={inputStyle} /><small style={{ color: "#8193b1" }}>Only people who share a conversation with you can view your status. It expires after 24 hours.</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowAddStatus(false)} style={secondaryButton}>Cancel</button><button disabled={!statusFile} style={primaryButton}>Share status</button></div></form></div>}
+      {showStatuses && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 560px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Recent statuses</h2>{statuses.map((status) => <button key={status.id} onClick={() => setActiveStatusId(status.id)} style={{ ...secondaryButton, display: "flex", gap: 12, alignItems: "center", textAlign: "left" }}><img src={status.owner?.avatar_url || "https://www.gravatar.com/avatar/?d=mp"} alt="" style={{ width: 38, height: 38, borderRadius: "50%", objectFit: "cover" }} /><span><strong>{status.owner?.display_name || "Member"}</strong><small style={{ display: "block", color: "#8193b1" }}>{status.caption || "Status update"} · expires {new Date(status.expires_at).toLocaleTimeString()}</small></span></button>)}{!statuses.length && <small style={{ color: "#8193b1" }}>No active statuses from your contacts.</small>}<button onClick={() => setShowStatuses(false)} style={secondaryButton}>Close</button></section></div>}
+      {activeStatusId && (() => { const status = statuses.find((item) => item.id === activeStatusId); return status ? <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 680px)", maxHeight: "90vh", padding: 16, display: "grid", gap: 10 }}><div style={{ display: "flex", justifyContent: "space-between" }}><strong>{status.owner?.display_name || "Member"}</strong><button onClick={() => setActiveStatusId("")} style={secondaryButton}>Close</button></div>{status.media_type?.startsWith("video/") ? <video src={status.signedUrl} controls autoPlay style={{ maxWidth: "100%", maxHeight: "70vh", margin: "0 auto" }} /> : <img src={status.signedUrl} alt={status.caption || "Status"} style={{ maxWidth: "100%", maxHeight: "70vh", objectFit: "contain", margin: "0 auto" }} />}<p style={{ margin: 0, color: "#cbd8ec" }}>{status.caption}</p><small style={{ color: "#8193b1" }}>Expires {new Date(status.expires_at).toLocaleString()}</small></section></div> : null; })()}
       {showSchedule && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 520px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Scheduled messages</h2><p style={{ color: "#8193b1", fontSize: 12 }}>Messages are delivered automatically by the database scheduler, which checks once per minute.</p>{draft.trim() && <form onSubmit={scheduleMessage} style={{ display: "grid", gap: 8 }}><strong style={{ fontSize: 13 }}>Schedule your current draft</strong><textarea value={draft} readOnly rows={3} style={{ ...inputStyle, opacity: .8 }} /><input type="datetime-local" value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} min={new Date(Date.now() + 60000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0,16)} required style={inputStyle} /><button style={primaryButton}>Schedule message</button></form>}<div style={{ display: "grid", gap: 8 }}><strong style={{ fontSize: 13 }}>Pending messages</strong>{scheduledMessages.map((item) => <div key={item.id} style={{ padding: 10, borderRadius: 8, background: "#14233a", display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}><div><div style={{ fontSize: 13 }}>{item.body}</div><small style={{ color: "#8193b1" }}>{new Date(item.send_at).toLocaleString()}</small></div><button onClick={() => void cancelScheduledMessage(item.id)} style={secondaryButton}>Cancel</button></div>)}{!scheduledMessages.length && <small style={{ color: "#8193b1" }}>No pending scheduled messages in this conversation.</small>}</div><button onClick={() => setShowSchedule(false)} style={secondaryButton}>Close</button></section></div>}
       {showTopics && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 460px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Conversation topics</h2><p style={{ color: "#8193b1", fontSize: 12 }}>Use topics to organise group discussions. Select a topic before sending a message.</p><div style={{ display: "grid", gap: 7 }}>{topics.map((topic) => <button key={topic.id} onClick={() => { setTopicId(topic.id); setShowTopics(false); }} style={{ ...secondaryButton, textAlign: "left" }}>#{topic.name}{topicId === topic.id ? " · Selected" : ""}</button>)}{!topics.length && <small style={{ color: "#8193b1" }}>No topics yet.</small>}</div>{["owner","admin"].includes(activeConversation?.role ?? "") && <form onSubmit={createTopic} style={{ display: "flex", gap: 8 }}><input value={newTopicName} onChange={(e) => setNewTopicName(e.target.value)} maxLength={80} placeholder="New topic name" required style={inputStyle} /><button style={primaryButton}>Add</button></form>}<button onClick={() => { setTopicId(""); setShowTopics(false); }} style={secondaryButton}>Clear topic / close</button></section></div>}
       {showPoll && <div style={modalStyle}><form onSubmit={createPoll} style={{ ...panel, width: "min(100%, 480px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Create a poll</h2><input value={pollQuestion} onChange={(e) => setPollQuestion(e.target.value)} maxLength={500} required placeholder="Ask a question" style={inputStyle} /><textarea value={pollOptions} onChange={(e) => setPollOptions(e.target.value)} rows={5} placeholder={"One answer per line\nOption 2"} style={{ ...inputStyle, resize: "vertical" }} /><label style={{ display: "flex", gap: 8, alignItems: "center", color: "#cbd8ec", fontSize: 13 }}><input type="checkbox" checked={pollMultiple} onChange={(e) => setPollMultiple(e.target.checked)} /> Allow multiple answers</label><small style={{ color: "#8193b1" }}>Add 2–10 options, one per line. Votes are visible to conversation members.</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowPoll(false)} style={secondaryButton}>Cancel</button><button disabled={busy} style={primaryButton}>Share poll</button></div></form></div>}
