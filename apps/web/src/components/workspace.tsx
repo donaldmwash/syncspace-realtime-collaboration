@@ -67,6 +67,8 @@ export function Workspace() {
   const [profileName, setProfileName] = useState("");
   const [profileUsername, setProfileUsername] = useState("");
   const [showProfile, setShowProfile] = useState(false);
+  const [showPasswordRecovery, setShowPasswordRecovery] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const channelRef = useRef<any>(null);
@@ -124,8 +126,9 @@ export function Workspace() {
       setUser(data.session?.user ?? null);
       setAuthReady(true);
     });
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
+      if (event === "PASSWORD_RECOVERY") setShowPasswordRecovery(true);
       setAuthReady(true);
     });
     return () => { alive = false; listener.subscription.unsubscribe(); };
@@ -182,7 +185,7 @@ export function Workspace() {
       if (authMode === "signup") {
         const clean = displayName.trim().replace(/\s+/g, " ").slice(0, 60);
         if (!clean) throw new Error("Enter the name other members will see.");
-        const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { display_name: clean } } });
+        const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { display_name: clean }, emailRedirectTo: window.location.origin } });
         if (error) throw error;
         if (!data.session) setNotice("Account created. Check your email to confirm your address, then sign in.");
         else setNotice("Your account is ready. Welcome to SyncSpace.");
@@ -193,6 +196,25 @@ export function Workspace() {
       }
     } catch (error) { setNotice(error instanceof Error ? error.message : "Authentication failed."); }
     finally { setBusy(false); }
+  }
+
+
+  async function requestPasswordReset() {
+    if (!supabase || !email.trim()) { setNotice("Enter your account email first."); return; }
+    setBusy(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: window.location.origin });
+    setNotice(error ? error.message : "If that email belongs to an account, a password-reset link has been sent.");
+    setBusy(false);
+  }
+
+  async function updateRecoveredPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || newPassword.length < 8) { setNotice("Use a password with at least 8 characters."); return; }
+    setBusy(true);
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    setNotice(error ? error.message : "Your password has been updated.");
+    if (!error) { setShowPasswordRecovery(false); setNewPassword(""); }
+    setBusy(false);
   }
 
   async function signOut() {
@@ -367,6 +389,7 @@ export function Workspace() {
           <label style={{ color: "#cbd8ec", fontSize: 13 }}>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" placeholder="you@example.com" style={{ ...inputStyle, marginTop: 7 }} /></label>
           <label style={{ color: "#cbd8ec", fontSize: 13 }}>Password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} autoComplete={authMode === "signup" ? "new-password" : "current-password"} placeholder="At least 8 characters" style={{ ...inputStyle, marginTop: 7 }} /></label>
           <button type="submit" disabled={busy} style={{ ...primaryButton, marginTop: 6 }}>{busy ? "Please wait…" : authMode === "signup" ? "Create my account" : "Sign in"}</button>
+          {authMode === "signin" && <button type="button" onClick={() => void requestPasswordReset()} disabled={busy} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 12 }}>Forgot your password?</button>}
         </form>
         <p role="status" style={{ color: "#9eb0cb", fontSize: 13, lineHeight: 1.6, marginTop: 18 }}>{notice}</p>
         <p style={{ color: "#7184a3", fontSize: 11 }}>Use a real email address. If email confirmation is enabled, verify your address before signing in.</p>
@@ -445,6 +468,7 @@ export function Workspace() {
         </section>
       </div>
 
+      {showPasswordRecovery && <div style={modalStyle}><form onSubmit={updateRecoveredPassword} style={{ ...panel, width: "min(100%, 420px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Choose a new password</h2><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} required placeholder="New password (8+ characters)" style={inputStyle} /><button disabled={busy} style={primaryButton}>Update password</button><p style={{ color: "#8193b1", fontSize: 12 }}>{notice}</p></form></div>}
       {showCreate && <div style={modalStyle}><form onSubmit={createConversation} style={{ ...panel, width: "min(100%, 440px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Create a conversation</h2><div style={{ display: "flex", gap: 8 }}><button type="button" onClick={() => setNewType("group")} style={{ ...secondaryButton, flex: 1, background: newType === "group" ? "#20365c" : "transparent" }}>Group</button><button type="button" onClick={() => setNewType("channel")} style={{ ...secondaryButton, flex: 1, background: newType === "channel" ? "#20365c" : "transparent" }}>Channel</button></div><input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder={newType === "group" ? "Group name" : "Channel name"} maxLength={100} required style={inputStyle} /><p style={{ color: "#8193b1", fontSize: 12 }}>{newType === "channel" ? "Channels are announcement-first spaces. Only owners and admins can post." : "Groups are private. Add people by their SyncSpace username after creation."}</p><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowCreate(false)} style={secondaryButton}>Cancel</button><button disabled={busy} style={primaryButton}>Create</button></div></form></div>}
 
       {showMembers && activeConversation && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 480px)", padding: 22 }}><h2 style={{ marginTop: 0 }}>Add members</h2><p style={{ color: "#8193b1", fontSize: 13 }}>Search by exact or partial username. People must set a username in their profile to be found.</p><form onSubmit={findMembers} style={{ display: "flex", gap: 8 }}><input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="@username" style={inputStyle} /><button style={primaryButton}>Find</button></form><div style={{ display: "grid", gap: 8, marginTop: 14 }}>{memberResults.map((member) => <div key={member.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 10, background: "#14233a", borderRadius: 8 }}><span>{member.display_name} <small style={{ color: "#8193b1" }}>@{member.username}</small></span><div style={{ display: "flex", gap: 6 }}><button onClick={() => void addMember(member.id)} style={secondaryButton}>Add</button><button onClick={() => void startDirect(member)} style={secondaryButton}>Message</button></div></div>)}</div><button onClick={() => setShowMembers(false)} style={{ ...secondaryButton, width: "100%", marginTop: 14 }}>Close</button></section></div>}
