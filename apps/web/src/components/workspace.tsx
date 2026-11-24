@@ -60,6 +60,7 @@ export function Workspace() {
   const [activeId, setActiveId] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
+  const [draftReady, setDraftReady] = useState(false);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editingId, setEditingId] = useState("");
   const [editDraft, setEditDraft] = useState("");
@@ -248,6 +249,35 @@ export function Workspace() {
     return () => { void supabase.removeChannel(channel); channelRef.current = null; };
   }, [activeId, supabase, user, loadMessages, profileName]);
 
+
+
+  useEffect(() => {
+    if (!supabase || !user || !activeId) { setDraftReady(false); return; }
+    let alive = true;
+    setDraftReady(false);
+    setDraft("");
+    void supabase.from("message_drafts").select("body").eq("user_id", user.id).eq("conversation_id", activeId).maybeSingle().then(({ data, error }) => {
+      if (!alive) return;
+      if (error) setNotice(error.message);
+      setDraft(data?.body ?? "");
+      setDraftReady(true);
+    });
+    return () => { alive = false; };
+  }, [activeId, user, supabase]);
+
+  useEffect(() => {
+    if (!supabase || !user || !activeId || !draftReady) return;
+    const timeout = window.setTimeout(() => {
+      if (!draft.trim()) {
+        void supabase.from("message_drafts").delete().eq("user_id", user.id).eq("conversation_id", activeId);
+      } else {
+        void supabase.from("message_drafts").upsert({
+          user_id: user.id, conversation_id: activeId, body: draft.slice(0, 20000), updated_at: new Date().toISOString(),
+        }, { onConflict: "user_id,conversation_id" });
+      }
+    }, 700);
+    return () => window.clearTimeout(timeout);
+  }, [draft, draftReady, activeId, user, supabase]);
 
   useEffect(() => {
     if (!supabase || !activeId) { setTopics([]); setTopicId(""); return; }
