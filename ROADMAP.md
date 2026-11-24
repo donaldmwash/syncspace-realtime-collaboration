@@ -35,7 +35,8 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [ ] Full role/permission management UI, member removal and ownership transfer.
 - [x] Topic labels and topic-scoped message creation.
 - [ ] Channel broadcast/subscription management.
-- [~] Message pinning and Saved Messages insertion exist; dedicated management/browsing screens and forwarding remain outstanding.
+- [x] Pinned-message management and Saved Messages browsing.
+- [x] Forward text and attachment messages across conversations.
 
 ## Phase 3 — Everyday messaging
 
@@ -44,7 +45,8 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [x] Read receipts.
 - [~] Search currently filters the most recent 300 loaded messages; server-side full-history search and unread counters remain outstanding.
 - [x] Image, video, audio and file uploads with private storage and previews.
-- [ ] Voice-note recording/playback UX, albums, contact/location/live-location sharing and link previews.
+- [x] Browser voice-note recording and playback.
+- [ ] Albums, contact/location/live-location sharing, link previews and shared-media browser.
 - [ ] Draft synchronization, folders, mentions and shared-media browser.
 - [x] Poll creation/voting with single-choice enforcement in the database.
 - [x] Scheduled text messages with an active one-minute Supabase Cron dispatcher.
