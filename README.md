@@ -68,7 +68,7 @@ The realtime database, RLS policies, private conversation-files bucket and publi
 
 ## Deployment status
 
-The new web client is deployed to a Vercel preview from this feature branch for build validation. Preview deployments are protected by Vercel SSO and are not public participant links. The production alias is still on the previous guest-chat implementation; production Supabase environment variables are staged, but this branch has not been promoted; do not direct participants to production as though this new authenticated version has been released. Production cutover requires successful multi-account testing and the Auth redirect allowlist above.
+A Vercel preview was successfully deployed from this feature branch. The latest branch source (including multi-file albums and album forwarding) also passed a clean Node 22 production build and TypeScript validation in a Vercel sandbox. New Vercel deployment creation is currently blocked by the team\u2019s 100-deployments-per-day API limit, so the most recent public preview URL does not yet contain the very latest commit. Preview deployments are protected by Vercel SSO and are not public participant links. The production alias is still on the previous guest-chat implementation; production Supabase environment variables are staged, but this branch has not been promoted; do not direct participants to production as though this new authenticated version has been released. Production cutover requires successful multi-account testing and the Auth redirect allowlist above.
 
 ## Security notes
 
