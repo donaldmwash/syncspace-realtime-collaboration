@@ -11,24 +11,24 @@ The `feature/syncspace-2-auth-foundation` branch connects the web client to the 
 - Email/password signup, sign-in, sign-out, email-confirmation redirect handling and password recovery.
 - Editable display name, unique username and profile-picture upload.
 - Shared Community Lounge for new accounts.
-- Private direct conversations, groups and announcement channels.
+- Private direct conversations, groups, private announcement channels and discoverable public channels with follow/join support.
 - Username-based member discovery and group/channel membership.
 - Persistent messages, replies, sender-only edits/deletes, reactions and read receipts.
-- Typing indicators and online presence.
+- Typing indicators, online presence and profile-level presence privacy controls.
 - Private conversation file storage (50 MB per file), with membership-checked access and image/video/audio previews.
-- Saved Messages browsing, admin-only pinned-message management and personal conversation folders.
+- Saved Messages browsing, admin-only pinned-message management, personal conversation folders and per-conversation unread counts.
 - Message forwarding across conversations, including copying attachment objects into the destination conversation.
 - Browser microphone recording and delivery of voice messages.
 - User-initiated one-time location sharing through a Maps link.
 - Group/channel invite links with 7-day expiry, a 50-join cap, revocation and JWT-verified Edge Function redemption.
-- Topic labels, single/multiple-choice polls with database-enforced single-choice voting, and scheduled text delivery via an active one-minute database job.
+- Topic labels, single/multiple-choice polls with database-enforced single-choice voting, full-text search across accessible message history, @username mention inbox, and scheduled text delivery via an active one-minute database job.
 - Conversation-level disappearing messages (1 hour, 24 hours, 7 days or 30 days) with automatic database cleanup.
 - 24-hour image/video status updates with contact-scoped private media and automatic expiry cleanup.
 - Account blocking (direct-message restrictions and hidden blocked-user messages) and report submission.
 
-Some controls are intentionally not presented as finished features yet: Full report moderation, server-side full-history search, contact cards, live location sharing and link previews, calls, bots, device management, export/backup and end-to-end encryption remain outstanding.
+Some controls are intentionally not presented as finished features yet: QR invite rendering, ownership transfer, granular channel permissions, contact cards, live location sharing and link previews, full report moderation, channel analytics, push notifications, WebRTC calls, bots, device/session management, export/backup and end-to-end encryption remain outstanding. Automated and multi-account acceptance testing is also required before production release.
 
-## Local setup
+## Database migrations\n\nSchema changes for full-text search, message mentions, direct-message block enforcement, public channel subscriptions and unread counters are tracked under `supabase/migrations`. Apply migrations in timestamp order to a new Supabase project after the baseline schema has been provisioned.\n\n## Local setup
 
 Use Node.js 22 or newer.
 
