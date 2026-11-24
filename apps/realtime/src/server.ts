@@ -15,7 +15,7 @@ type ChatMessage = {
 type StoredFile = { roomId: string; name: string; type: string; bytes: Buffer };
 const storedFiles = new Map<string, StoredFile>();
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
-const BLOCKED_EXTENSIONS = /\\.(?:exe|dll|bat|cmd|com|msi|sh|ps1|app|dmg|apk|jar|scr)$/i;
+const BLOCKED_EXTENSIONS = [".exe", ".dll", ".bat", ".cmd", ".com", ".msi", ".sh", ".ps1", ".app", ".dmg", ".apk", ".jar", ".scr"];
 
 const httpServer = createServer((req, res) => {
   const pathname = new URL(req.url || "/", "http://localhost").pathname;
@@ -23,7 +23,7 @@ const httpServer = createServer((req, res) => {
     const fileId = pathname.slice("/files/".length);
     const file = storedFiles.get(fileId);
     if (!file) { res.writeHead(404); res.end("File not found"); return; }
-    const safeName = file.name.replace(/[\\r\\n"]/g, "_");
+    const safeName = file.name.replaceAll(String.fromCharCode(13), "_").replaceAll(String.fromCharCode(10), "_").replaceAll('"', "_");
     const inline = file.type.startsWith("image/") || file.type === "application/pdf";
     res.writeHead(200, {
       "content-type": file.type,
@@ -85,13 +85,13 @@ io.on("connection", (socket) => {
 
   socket.on("chat:upload", (payload: { name?: unknown; type?: unknown; data?: unknown }) => {
     if (typeof payload?.name !== "string" || typeof payload?.type !== "string" || typeof payload?.data !== "string") return;
-    const name = payload.name.replace(/[\\/\\\\\\r\\n\\u0000-\\u001f]/g, "_").trim().slice(0, 180);
-    if (!name || BLOCKED_EXTENSIONS.test(name)) { socket.emit("chat:upload-error", "This file type is not allowed."); return; }
-    const match = payload.data.match(/^data:([\\w.+-]+\\/[\\w.+-]+);base64,([A-Za-z0-9+/=]+)$/);
-    if (!match || match[1] !== payload.type || !/^([\\w.+-]+\\/[\\w.+-]+)$/.test(payload.type)) {
+    const name = payload.name.replaceAll("/", "_").replaceAll(String.fromCharCode(92), "_").replaceAll(String.fromCharCode(13), "_").replaceAll(String.fromCharCode(10), "_").trim().slice(0, 180);
+    if (!name || BLOCKED_EXTENSIONS.some((extension) => name.toLowerCase().endsWith(extension))) { socket.emit("chat:upload-error", "This file type is not allowed."); return; }
+    const prefix = `data:${payload.type};base64,`;
+    if (!payload.type.includes("/") || !payload.data.startsWith(prefix) || !/^[A-Za-z0-9+/]+=*$/.test(payload.data.slice(prefix.length))) {
       socket.emit("chat:upload-error", "The selected file could not be read."); return;
     }
-    const bytes = Buffer.from(match[2], "base64");
+    const bytes = Buffer.from(payload.data.slice(prefix.length), "base64");
     if (!bytes.length || bytes.length > MAX_FILE_SIZE) { socket.emit("chat:upload-error", "Files must be 5 MB or smaller."); return; }
     if (storedFiles.size >= 500) { socket.emit("chat:upload-error", "The room has reached its temporary attachment limit."); return; }
     const id = randomUUID();
