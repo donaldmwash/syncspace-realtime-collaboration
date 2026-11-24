@@ -7,7 +7,7 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [x] Existing Socket.IO public room remains available in the realtime service for the legacy frontend.
 - [x] Dedicated Supabase project created in the existing organisation (London region).
 - [x] Relational schema and RLS groundwork for profiles, conversations, members, messages, attachments, reactions, receipts and the extended feature set.
-- [x] Supabase security advisor currently reports no findings.
+- [x] No exposed application tables are missing RLS policies.\n- [ ] Move the non-relocatable `pg_net` extension out of the `public` schema if the managed extension installation supports it; the security advisor currently reports this one extension-placement warning.
 - [x] Authenticated Supabase-backed web workspace is implemented on `feature/syncspace-2-auth-foundation`.
 - [ ] The new authenticated workspace has not been promoted to the production alias.
 - [ ] Existing in-memory guest-room messages/files have not been migrated; they are not available to the new authenticated workspace.
@@ -34,7 +34,7 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [ ] QR-code rendering for invite links.
 - [ ] Ownership transfer and granular per-action permissions.
 - [x] Topic labels and topic-scoped message creation.
-- [ ] Channel broadcast/subscription management.
+- [x] Public channel discovery and self-service follow/join; channel posting remains admin-only.
 - [x] Pinned-message management and Saved Messages browsing.
 - [x] Forward text and attachment messages across conversations.
 
@@ -43,7 +43,7 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [x] Emoji reactions.
 - [x] Typing indicators and online presence in an open conversation.
 - [x] Read receipts.
-- [~] Search currently filters the most recent 300 loaded messages; server-side full-history search and unread counters remain outstanding.
+- [x] Full-text search across accessible message history using an RLS-respecting database function and GIN index.\n- [x] Per-conversation unread message counters.
 - [x] Image, video, audio and file uploads with private storage and previews.
 - [x] Browser voice-note recording and playback.
 - [x] One-time location sharing.
@@ -51,7 +51,7 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [x] Personal conversation folders.
 - [x] Draft synchronization across sessions.
 - [x] Shared-media browser.
-- [ ] Mentions.
+- [x] @username mentions with automatic membership-checked mention records and a mention inbox.
 - [x] Poll creation/voting with single-choice enforcement in the database.
 - [x] Scheduled text messages with an active one-minute Supabase Cron dispatcher.
 
@@ -60,7 +60,7 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [x] 24-hour image/video status updates with contact-scoped storage and automatic cleanup.
 - [x] Conversation-level disappearing messages with scheduled storage cleanup.
 - [~] Account blocking and report submission are implemented; report review queues, spam protection, admin moderation and audit trails remain outstanding.
-- [ ] Session/device management and privacy settings.
+- [x] Profile controls for online-presence and last-seen visibility.\n- [ ] Device/session management and server-side enforcement of last-seen visibility.
 - [ ] Backup/export and account recovery hardening.
 - [ ] Encryption design review; do not claim end-to-end encryption until independently tested.
 
