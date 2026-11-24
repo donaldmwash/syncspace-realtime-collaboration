@@ -47,7 +47,8 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [x] Image, video, audio and file uploads with private storage and previews.
 - [x] Browser voice-note recording and playback.
 - [ ] Albums, contact/location/live-location sharing, link previews and shared-media browser.
-- [ ] Draft synchronization, folders, mentions and shared-media browser.
+- [x] Personal conversation folders.
+- [ ] Draft synchronization, mentions and shared-media browser.
 - [x] Poll creation/voting with single-choice enforcement in the database.
 - [x] Scheduled text messages with an active one-minute Supabase Cron dispatcher.
 
