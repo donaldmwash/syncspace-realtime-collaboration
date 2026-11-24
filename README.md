@@ -19,13 +19,14 @@ The `feature/syncspace-2-auth-foundation` branch connects the web client to the 
 - Saved Messages browsing, admin-only pinned-message management and personal conversation folders.
 - Message forwarding across conversations, including copying attachment objects into the destination conversation.
 - Browser microphone recording and delivery of voice messages.
+- User-initiated one-time location sharing through a Maps link.
 - Group/channel invite links with 7-day expiry, a 50-join cap, revocation and JWT-verified Edge Function redemption.
 - Topic labels, single/multiple-choice polls with database-enforced single-choice voting, and scheduled text delivery via an active one-minute database job.
 - Conversation-level disappearing messages (1 hour, 24 hours, 7 days or 30 days) with automatic database cleanup.
 - 24-hour image/video status updates with contact-scoped private media and automatic expiry cleanup.
 - Account blocking (direct-message restrictions and hidden blocked-user messages) and report submission.
 
-Some controls are intentionally not presented as finished features yet: Full report moderation, server-side full-history search, contact/location sharing, link previews, calls, bots, device management, export/backup and end-to-end encryption remain outstanding.
+Some controls are intentionally not presented as finished features yet: Full report moderation, server-side full-history search, contact cards, live location sharing and link previews, calls, bots, device management, export/backup and end-to-end encryption remain outstanding.
 
 ## Local setup
 
