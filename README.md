@@ -25,7 +25,7 @@ The `feature/syncspace-2-auth-foundation` branch connects the web client to the 
 - 24-hour image/video status updates with contact-scoped private media and automatic expiry cleanup.
 - Account blocking (direct-message restrictions and hidden blocked-user messages) and report submission.
 
-Some controls are intentionally not presented as finished features yet: Full report moderation, server-side full-history search, shared-media browser, contact/location sharing, link previews, calls, bots, device management, export/backup and end-to-end encryption remain outstanding.
+Some controls are intentionally not presented as finished features yet: Full report moderation, server-side full-history search, contact/location sharing, link previews, calls, bots, device management, export/backup and end-to-end encryption remain outstanding.
 
 ## Local setup
 
