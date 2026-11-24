@@ -14,6 +14,7 @@ type Conversation = {
   last_message_at?: string | null;
   role?: string;
 };
+type ConversationTopic = { id: string; name: string; description: string | null };
 type Attachment = { id: string; file_name: string; mime_type: string | null; size_bytes: number; object_path: string; signedUrl?: string };
 type Poll = { id: string; question: string; allows_multiple: boolean; closes_at: string | null; poll_options: { id: string; label: string; position: number }[]; poll_votes: { option_id: string; user_id: string }[] };
 type Message = {
@@ -23,6 +24,8 @@ type Message = {
   body: string | null;
   message_type: string;
   reply_to_id: string | null;
+  topic_id?: string | null;
+  topic?: { name: string } | { name: string }[] | null;
   created_at: string;
   edited_at: string | null;
   deleted_at: string | null;
@@ -71,6 +74,10 @@ export function Workspace() {
   const [avatarUrl, setAvatarUrl] = useState("");
   const [showProfile, setShowProfile] = useState(false);
   const [showPoll, setShowPoll] = useState(false);
+  const [topics, setTopics] = useState<ConversationTopic[]>([]);
+  const [topicId, setTopicId] = useState("");
+  const [showTopics, setShowTopics] = useState(false);
+  const [newTopicName, setNewTopicName] = useState("");
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState("");
   const [pollMultiple, setPollMultiple] = useState(false);
@@ -106,7 +113,7 @@ export function Workspace() {
     if (!supabase || !conversationId) return;
     const { data, error } = await supabase
       .from("messages")
-      .select("id,conversation_id,sender_id,body,message_type,reply_to_id,created_at,edited_at,deleted_at,sender:profiles!messages_sender_id_fkey(display_name,avatar_url),attachments(id,file_name,mime_type,size_bytes,object_path),reactions:message_reactions(emoji,user_id),receipts:message_receipts(user_id,read_at),polls(id,question,allows_multiple,closes_at,poll_options(id,label,position),poll_votes(option_id,user_id)),reply:messages!messages_reply_to_id_fkey(id,body,sender:profiles!messages_sender_id_fkey(display_name))")
+      .select("id,conversation_id,sender_id,body,message_type,reply_to_id,topic_id,created_at,edited_at,deleted_at,sender:profiles!messages_sender_id_fkey(display_name,avatar_url),topic:conversation_topics(name),attachments(id,file_name,mime_type,size_bytes,object_path),reactions:message_reactions(emoji,user_id),receipts:message_receipts(user_id,read_at),polls(id,question,allows_multiple,closes_at,poll_options(id,label,position),poll_votes(option_id,user_id)),reply:messages!messages_reply_to_id_fkey(id,body,sender:profiles!messages_sender_id_fkey(display_name))")
       .eq("conversation_id", conversationId)
       .is("deleted_at", null)
       .order("created_at", { ascending: true })
@@ -118,7 +125,7 @@ export function Workspace() {
         const { data: signed } = await supabase.storage.from("conversation-files").createSignedUrl(file.object_path, 3600);
         return { ...file, signedUrl: signed?.signedUrl };
       }));
-      return { ...row, sender: Array.isArray(row.sender) ? row.sender[0] : row.sender, reply: Array.isArray(row.reply) ? row.reply[0] : row.reply, polls: Array.isArray(row.polls) ? row.polls[0] : row.polls, attachments } as Message;
+      return { ...row, sender: Array.isArray(row.sender) ? row.sender[0] : row.sender, reply: Array.isArray(row.reply) ? row.reply[0] : row.reply, polls: Array.isArray(row.polls) ? row.polls[0] : row.polls, topic: Array.isArray(row.topic) ? row.topic[0] : row.topic, attachments } as Message;
     }));
     setMessages(hydrated);
     const unread = rows.filter((row) => row.sender_id !== user?.id).map((row) => ({ message_id: row.id, user_id: user?.id, read_at: new Date().toISOString() }));
@@ -186,6 +193,16 @@ export function Workspace() {
     channelRef.current = channel;
     return () => { void supabase.removeChannel(channel); channelRef.current = null; };
   }, [activeId, supabase, user, loadMessages, profileName]);
+
+
+  useEffect(() => {
+    if (!supabase || !activeId) { setTopics([]); setTopicId(""); return; }
+    setTopicId("");
+    void supabase.from("conversation_topics").select("id,name,description").eq("conversation_id", activeId).order("created_at", { ascending: true }).then(({ data, error }) => {
+      if (error) setNotice(error.message);
+      else setTopics((data ?? []) as ConversationTopic[]);
+    });
+  }, [activeId, supabase]);
 
   async function authenticate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -318,7 +335,7 @@ export function Workspace() {
     const body = draft.trim().slice(0, 20000);
     const { error } = await supabase.from("messages").insert({
       conversation_id: activeConversation.id, sender_id: user.id, body,
-      message_type: "text", reply_to_id: replyTo?.id ?? null,
+      message_type: "text", reply_to_id: replyTo?.id ?? null, topic_id: topicId || null,
     });
     if (error) { setNotice(error.message); return; }
     setDraft(""); setReplyTo(null);
@@ -362,6 +379,16 @@ export function Workspace() {
   }
 
 
+  async function createTopic(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !user || !activeConversation || !newTopicName.trim()) return;
+    const { data, error } = await supabase.from("conversation_topics").insert({
+      conversation_id: activeConversation.id, name: newTopicName.trim().slice(0, 80), created_by: user.id,
+    }).select("id,name,description").single();
+    if (error) setNotice(error.message);
+    else { setTopics((current) => [...current, data]); setTopicId(data.id); setNewTopicName(""); setNotice("Topic created and selected."); }
+  }
+
   async function createPoll(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!supabase || !user || !activeConversation) return;
@@ -373,7 +400,7 @@ export function Workspace() {
     }
     setBusy(true);
     const { data: message, error: messageError } = await supabase.from("messages").insert({
-      conversation_id: activeConversation.id, sender_id: user.id, body: question, message_type: "system",
+      conversation_id: activeConversation.id, sender_id: user.id, body: question, message_type: "system", topic_id: topicId || null,
     }).select("id").single();
     if (messageError) { setNotice(messageError.message); setBusy(false); return; }
     const { data: poll, error: pollError } = await supabase.from("polls").insert({
@@ -419,7 +446,7 @@ export function Workspace() {
     const type = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : file.type.startsWith("audio/") ? "audio" : "file";
     const { data: message, error: messageError } = await supabase.from("messages").insert({
       conversation_id: activeConversation.id, sender_id: user.id, body: file.name,
-      message_type: type, reply_to_id: replyTo?.id ?? null,
+      message_type: type, reply_to_id: replyTo?.id ?? null, topic_id: topicId || null,
     }).select("id").single();
     if (messageError) {
       await supabase.storage.from("conversation-files").remove([path]);
@@ -497,7 +524,7 @@ export function Workspace() {
           {activeConversation ? <>
             <header style={{ padding: "17px 20px", borderBottom: "1px solid #26334b", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div><strong style={{ fontSize: 17 }}>{activeConversation.title || "Conversation"}</strong><div style={{ color: "#8193b1", fontSize: 12, marginTop: 4 }}>{activeConversation.is_private ? "Private conversation" : "Public community"} · {onlineCount} online{activeConversation.is_announcement_only ? " · Announcements" : ""}</div></div>
-              <div style={{ display: "flex", gap: 8 }}><button onClick={() => setShowMembers(true)} style={secondaryButton}>Members / invite</button></div>
+              <div style={{ display: "flex", gap: 8 }}><button onClick={() => setShowTopics(true)} style={secondaryButton}>Topics</button><button onClick={() => setShowMembers(true)} style={secondaryButton}>Members / invite</button></div>
             </header>
             <div aria-live="polite" style={{ flex: 1, minHeight: 400, maxHeight: "calc(100vh - 230px)", overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
               {visibleMessages.map((message) => {
@@ -506,7 +533,7 @@ export function Workspace() {
                 const poll = Array.isArray(message.polls) ? message.polls[0] : message.polls;
                 const reply = Array.isArray(message.reply) ? message.reply[0] : message.reply;
                 return <article key={message.id} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "min(82%, 720px)", minWidth: 130 }}>
-                  <div style={{ color: mine ? "#9db8ff" : "#8ce0b0", fontSize: 11, margin: "0 5px 5px" }}>{mine ? "You" : message.sender?.display_name || "Member"} · {new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{message.edited_at ? " · Edited" : ""}{mine && message.receipts?.some((receipt) => receipt.read_at) ? " · ✓✓ Read" : ""}</div>
+                  <div style={{ color: mine ? "#9db8ff" : "#8ce0b0", fontSize: 11, margin: "0 5px 5px" }}>{mine ? "You" : message.sender?.display_name || "Member"}{message.topic && <span> · #{(Array.isArray(message.topic) ? message.topic[0] : message.topic)?.name}</span>} · {new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{message.edited_at ? " · Edited" : ""}{mine && message.receipts?.some((receipt) => receipt.read_at) ? " · ✓✓ Read" : ""}</div>
                   {reply && <div style={{ padding: "7px 10px", borderLeft: "3px solid #86a8ff", background: "#111f34", borderRadius: 7, color: "#aebfda", fontSize: 11, marginBottom: 4 }}>Replying to {reply.sender?.display_name || "member"}: {(reply.body || "Attachment").slice(0, 120)}</div>}
                   {editingId === message.id ? <div style={{ ...panel, padding: 9 }}><textarea value={editDraft} onChange={(e) => setEditDraft(e.target.value)} style={{ ...inputStyle, minHeight: 80 }} /><div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}><button onClick={() => setEditingId("")} style={secondaryButton}>Cancel</button><button onClick={() => void editMessage(message.id)} style={primaryButton}>Save</button></div></div> : <div style={{ background: mine ? "#20365c" : "#1a2940", borderRadius: 13, padding: "11px 14px", lineHeight: 1.6, overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>
                     {poll ? <div style={{ display: "grid", gap: 9, minWidth: 230 }}><strong>{poll.question}</strong>{[...poll.poll_options].sort((a,b) => a.position-b.position).map((option) => { const count = poll.poll_votes.filter((vote) => vote.option_id === option.id).length; const selected = poll.poll_votes.some((vote) => vote.option_id === option.id && vote.user_id === user.id); const total = poll.poll_votes.length; return <button key={option.id} onClick={() => void votePoll(poll, option.id)} disabled={!!poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now()} style={{ textAlign: "left", padding: 9, borderRadius: 8, border: "1px solid " + (selected ? "#86a8ff" : "#40516c"), background: selected ? "#263f68" : "#15243a", color: "#e7eefb" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>{selected ? "✓ " : ""}{option.label}</span><small>{count}</small></div><div style={{ height: 4, background: "#34445d", borderRadius: 5, marginTop: 7 }}><div style={{ width: (total ? Math.round(count / total * 100) : 0) + "%", height: "100%", background: "#86a8ff", borderRadius: 5 }} /></div></button>; })}<small style={{ color: "#aebfda" }}>{poll.poll_votes.length} vote(s) · {poll.allows_multiple ? "Multiple answers" : "Choose one"}{poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now() ? " · Closed" : ""}</small></div> : file ? <div style={{ display: "grid", gap: 7 }}>
@@ -530,6 +557,7 @@ export function Workspace() {
             {replyTo && <div style={{ padding: "9px 16px", background: "#14233a", borderTop: "1px solid #26334b", display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: 12, color: "#aebfda" }}>Replying to {replyTo.sender?.display_name || "member"}: {(replyTo.body || "Attachment").slice(0, 90)}</span><button onClick={() => setReplyTo(null)} style={{ ...secondaryButton, padding: "2px 8px" }}>×</button></div>}
             <form onSubmit={sendMessage} style={{ padding: 14, borderTop: "1px solid #26334b", display: "flex", gap: 9, alignItems: "center" }}>
               <input ref={fileRef} type="file" onChange={uploadFile} disabled={uploading} style={{ display: "none" }} />
+              <select aria-label="Message topic" value={topicId} onChange={(e) => setTopicId(e.target.value)} style={{ ...inputStyle, width: 130, padding: "9px 8px" }}><option value="">No topic</option>{topics.map((topic) => <option key={topic.id} value={topic.id}>{topic.name}</option>)}</select>
               <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading} style={{ ...secondaryButton, fontSize: 19 }}>{uploading ? "…" : "＋"}</button>
               {(!activeConversation.is_announcement_only || ["owner","admin"].includes(activeConversation.role ?? "")) && <button type="button" onClick={() => setShowPoll(true)} style={secondaryButton}>Poll</button>}
               <input value={draft} onChange={(e) => notifyTyping(e.target.value)} placeholder={activeConversation.is_announcement_only && activeConversation.role === "member" ? "Only admins can post here" : "Write a message…"} disabled={activeConversation.is_announcement_only && !["owner","admin"].includes(activeConversation.role ?? "")} style={{ ...inputStyle, flex: 1 }} />
@@ -541,6 +569,7 @@ export function Workspace() {
       </div>
 
       {showPasswordRecovery && <div style={modalStyle}><form onSubmit={updateRecoveredPassword} style={{ ...panel, width: "min(100%, 420px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Choose a new password</h2><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} required placeholder="New password (8+ characters)" style={inputStyle} /><button disabled={busy} style={primaryButton}>Update password</button><p style={{ color: "#8193b1", fontSize: 12 }}>{notice}</p></form></div>}
+      {showTopics && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 460px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Conversation topics</h2><p style={{ color: "#8193b1", fontSize: 12 }}>Use topics to organise group discussions. Select a topic before sending a message.</p><div style={{ display: "grid", gap: 7 }}>{topics.map((topic) => <button key={topic.id} onClick={() => { setTopicId(topic.id); setShowTopics(false); }} style={{ ...secondaryButton, textAlign: "left" }}>#{topic.name}{topicId === topic.id ? " · Selected" : ""}</button>)}{!topics.length && <small style={{ color: "#8193b1" }}>No topics yet.</small>}</div>{["owner","admin"].includes(activeConversation?.role ?? "") && <form onSubmit={createTopic} style={{ display: "flex", gap: 8 }}><input value={newTopicName} onChange={(e) => setNewTopicName(e.target.value)} maxLength={80} placeholder="New topic name" required style={inputStyle} /><button style={primaryButton}>Add</button></form>}<button onClick={() => { setTopicId(""); setShowTopics(false); }} style={secondaryButton}>Clear topic / close</button></section></div>}
       {showPoll && <div style={modalStyle}><form onSubmit={createPoll} style={{ ...panel, width: "min(100%, 480px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Create a poll</h2><input value={pollQuestion} onChange={(e) => setPollQuestion(e.target.value)} maxLength={500} required placeholder="Ask a question" style={inputStyle} /><textarea value={pollOptions} onChange={(e) => setPollOptions(e.target.value)} rows={5} placeholder={"One answer per line\nOption 2"} style={{ ...inputStyle, resize: "vertical" }} /><label style={{ display: "flex", gap: 8, alignItems: "center", color: "#cbd8ec", fontSize: 13 }}><input type="checkbox" checked={pollMultiple} onChange={(e) => setPollMultiple(e.target.checked)} /> Allow multiple answers</label><small style={{ color: "#8193b1" }}>Add 2–10 options, one per line. Votes are visible to conversation members.</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowPoll(false)} style={secondaryButton}>Cancel</button><button disabled={busy} style={primaryButton}>Share poll</button></div></form></div>}
       {showCreate && <div style={modalStyle}><form onSubmit={createConversation} style={{ ...panel, width: "min(100%, 440px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Create a conversation</h2><div style={{ display: "flex", gap: 8 }}><button type="button" onClick={() => setNewType("group")} style={{ ...secondaryButton, flex: 1, background: newType === "group" ? "#20365c" : "transparent" }}>Group</button><button type="button" onClick={() => setNewType("channel")} style={{ ...secondaryButton, flex: 1, background: newType === "channel" ? "#20365c" : "transparent" }}>Channel</button></div><input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder={newType === "group" ? "Group name" : "Channel name"} maxLength={100} required style={inputStyle} /><p style={{ color: "#8193b1", fontSize: 12 }}>{newType === "channel" ? "Channels are announcement-first spaces. Only owners and admins can post." : "Groups are private. Add people by their SyncSpace username after creation."}</p><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowCreate(false)} style={secondaryButton}>Cancel</button><button disabled={busy} style={primaryButton}>Create</button></div></form></div>}
 
