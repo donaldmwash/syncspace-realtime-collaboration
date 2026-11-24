@@ -7,6 +7,7 @@ type ChatMessage = {
   senderId: string;
   text: string;
   createdAt: string;
+  editedAt?: string;
 };
 
 const httpServer = createServer((_, res) => {
@@ -54,6 +55,35 @@ io.on("connection", (socket) => {
     if (history.length > 200) history.splice(0, history.length - 200);
     roomMessages.set(roomId, history);
     io.to(roomId).emit("chat:message", message);
+  });
+
+  socket.on("chat:edit", (payload: { id?: unknown; text?: unknown }) => {
+    if (typeof payload?.id !== "string" || typeof payload?.text !== "string") return;
+    const text = payload.text.trim().slice(0, 2000);
+    if (!text) return;
+    const history = roomMessages.get(roomId) ?? [];
+    const message = history.find((item) => item.id === payload.id);
+    if (!message || message.senderId !== socket.id) return;
+    message.text = text;
+    message.editedAt = new Date().toISOString();
+    io.to(roomId).emit("chat:message-updated", message);
+  });
+
+  socket.on("chat:delete", (payload: { id?: unknown }) => {
+    if (typeof payload?.id !== "string") return;
+    const history = roomMessages.get(roomId) ?? [];
+    const message = history.find((item) => item.id === payload.id);
+    if (!message || message.senderId !== socket.id) return;
+    roomMessages.set(roomId, history.filter((item) => item.id !== payload.id));
+    io.to(roomId).emit("chat:message-deleted", { id: payload.id });
+  });
+
+  socket.on("chat:clear-mine", () => {
+    const history = roomMessages.get(roomId) ?? [];
+    const remaining = history.filter((item) => item.senderId !== socket.id);
+    const deletedIds = history.filter((item) => item.senderId === socket.id).map((item) => item.id);
+    roomMessages.set(roomId, remaining);
+    if (deletedIds.length) io.to(roomId).emit("chat:messages-deleted", { ids: deletedIds });
   });
 
   socket.on("disconnect", () => {
