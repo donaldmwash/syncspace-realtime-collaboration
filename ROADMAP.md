@@ -46,7 +46,8 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [~] Search currently filters the most recent 300 loaded messages; server-side full-history search and unread counters remain outstanding.
 - [x] Image, video, audio and file uploads with private storage and previews.
 - [x] Browser voice-note recording and playback.
-- [ ] Albums, contact/location/live-location sharing, link previews and shared-media browser.
+- [x] One-time location sharing.
+- [ ] Albums, contact cards, live location sharing and link previews.
 - [x] Personal conversation folders.
 - [x] Draft synchronization across sessions.
 - [x] Shared-media browser.
