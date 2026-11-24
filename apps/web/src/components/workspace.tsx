@@ -66,6 +66,9 @@ export function Workspace() {
   const [editingId, setEditingId] = useState("");
   const [editDraft, setEditDraft] = useState("");
   const [search, setSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<{message_id:string;conversation_id:string;sender_id:string;body:string;created_at:string}[]>([]);
+  const [showMentions, setShowMentions] = useState(false);
+  const [mentionItems, setMentionItems] = useState<{message_id:string;created_at:string;message?:{id:string;body:string|null;conversation_id:string;created_at:string;sender?:{display_name:string}|{display_name:string}[]}}[]>([]);
   const [newTitle, setNewTitle] = useState("");
   const [newType, setNewType] = useState<"group" | "channel">("group");
   const [memberQuery, setMemberQuery] = useState("");
@@ -253,6 +256,18 @@ export function Workspace() {
   }, [activeId, supabase, user, loadMessages, profileName]);
 
 
+
+  useEffect(() => {
+    if (!supabase || !user || search.trim().length < 2) { setSearchResults([]); return; }
+    let alive = true;
+    const timeout = window.setTimeout(async () => {
+      const { data, error } = await supabase.rpc("search_messages", { p_query: search.trim(), p_limit: 50 });
+      if (!alive) return;
+      if (error) setNotice(error.message);
+      else setSearchResults((data ?? []) as {message_id:string;conversation_id:string;sender_id:string;body:string;created_at:string}[]);
+    }, 350);
+    return () => { alive = false; window.clearTimeout(timeout); };
+  }, [search, user, supabase]);
 
   useEffect(() => {
     if (!supabase || !user || !activeId) { setDraftReady(false); return; }
@@ -719,6 +734,16 @@ export function Workspace() {
     else setPinnedMessages((current) => current.filter((item) => item.id !== pinId));
   }
 
+  async function openMentions() {
+    if (!supabase || !user) return;
+    const { data, error } = await supabase.from("message_mentions")
+      .select("message_id,created_at,message:messages!message_mentions_message_id_fkey(id,body,conversation_id,created_at,sender:profiles!messages_sender_id_fkey(display_name))")
+      .eq("mentioned_user_id", user.id).order("created_at", { ascending: false }).limit(100);
+    if (error) { setNotice(error.message); return; }
+    setMentionItems((data ?? []) as any[]);
+    setShowMentions(true);
+  }
+
   async function openSavedMessages() {
     if (!supabase || !user) return;
     const { data: saves, error } = await supabase.from("saved_messages").select("message_id,created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(200);
@@ -983,7 +1008,7 @@ export function Workspace() {
     if (channelRef.current && user) void channelRef.current.send({ type: "broadcast", event: "typing", payload: { userId: user.id, name: profileName || "Someone" } });
   }
 
-  const visibleMessages = messages.filter((message) => !search.trim() || (message.body ?? "").toLowerCase().includes(search.toLowerCase()));
+  const visibleMessages = messages;
 
   if (!authReady) return <main style={{ minHeight: "100vh", display: "grid", placeItems: "center", color: "#cbd8ec" }}>Loading SyncSpace…</main>;
 
@@ -1022,9 +1047,9 @@ export function Workspace() {
             <button onClick={() => void openProfile()} style={{ ...secondaryButton, flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}> {profileName || user.email} </button>
             <button onClick={signOut} style={secondaryButton}>Sign out</button>
           </div>
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search messages…" style={{ ...inputStyle, marginBottom: 12 }} />
+          <div style={{ position: "relative" }}><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search all messages…" style={{ ...inputStyle, marginBottom: 12 }} />{search.trim().length >= 2 && <div style={{ position: "absolute", zIndex: 20, top: 48, left: 0, right: 0, maxHeight: 320, overflowY: "auto", background: "#101a2b", border: "1px solid #354663", borderRadius: 10, padding: 8, boxShadow: "0 12px 30px #0008" }}>{searchResults.map((item) => <button key={item.message_id} onClick={() => { setActiveId(item.conversation_id); setSearch(""); }} style={{ ...secondaryButton, display: "block", width: "100%", textAlign: "left", marginBottom: 5 }}><strong style={{ display: "block", fontSize: 12 }}>{item.body.slice(0, 150)}</strong><small style={{ color: "#8193b1" }}>{new Date(item.created_at).toLocaleString()}</small></button>)}{!searchResults.length && <small style={{ color: "#8193b1" }}>No matching messages found.</small>}</div>}</div>
           <div style={{ display: "flex", gap: 7, margin: "4px 0 12px" }}><button onClick={() => setShowAddStatus(true)} style={{ ...secondaryButton, flex: 1 }}>＋ Add status</button><button onClick={() => { void refreshStatuses(); setShowStatuses(true); }} style={{ ...secondaryButton, flex: 1 }}>Status · {statuses.length}</button></div>
-          <button onClick={() => void openSavedMessages()} style={{ ...secondaryButton, width: "100%", marginBottom: 7, textAlign: "left" }}>★ Saved Messages</button><button onClick={() => setShowFolders(true)} style={{ ...secondaryButton, width: "100%", marginBottom: 7, textAlign: "left" }}>Folders · {folders.length}</button><div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 9 }}><button onClick={() => setSelectedFolderId("")} style={{ ...secondaryButton, padding: "5px 8px", background: !selectedFolderId ? "#263f68" : undefined }}>All</button>{folders.map((folder) => <button key={folder.id} onClick={() => setSelectedFolderId(folder.id)} style={{ ...secondaryButton, padding: "5px 8px", background: selectedFolderId === folder.id ? "#263f68" : undefined }}>{folder.name}</button>)}</div>
+          <button onClick={() => void openMentions()} style={{ ...secondaryButton, width: "100%", marginBottom: 7, textAlign: "left" }}>@ Mentions</button><button onClick={() => void openSavedMessages()} style={{ ...secondaryButton, width: "100%", marginBottom: 7, textAlign: "left" }}>★ Saved Messages</button><button onClick={() => setShowFolders(true)} style={{ ...secondaryButton, width: "100%", marginBottom: 7, textAlign: "left" }}>Folders · {folders.length}</button><div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 9 }}><button onClick={() => setSelectedFolderId("")} style={{ ...secondaryButton, padding: "5px 8px", background: !selectedFolderId ? "#263f68" : undefined }}>All</button>{folders.map((folder) => <button key={folder.id} onClick={() => setSelectedFolderId(folder.id)} style={{ ...secondaryButton, padding: "5px 8px", background: selectedFolderId === folder.id ? "#263f68" : undefined }}>{folder.name}</button>)}</div>
           <div style={{ color: "#7184a3", fontSize: 11, letterSpacing: 1.5, margin: "8px 0" }}>YOUR CONVERSATIONS</div>
           <div style={{ display: "grid", gap: 7, overflowY: "auto" }}>
             {conversations.map((conversation) => (
@@ -1094,6 +1119,7 @@ export function Workspace() {
       {showFolders && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 480px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Conversation folders</h2><form onSubmit={createFolder} style={{ display: "flex", gap: 8 }}><input value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} maxLength={40} placeholder="New folder name" required style={inputStyle} /><button style={primaryButton}>Create</button></form>{activeConversation && <div style={{ display: "grid", gap: 7 }}><strong style={{ fontSize: 12 }}>Organise current conversation</strong><select value={folderAssignments[activeConversation.id] || ""} onChange={(e) => void assignActiveConversation(e.target.value)} style={inputStyle}><option value="">No folder</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></div>}<button onClick={() => setShowFolders(false)} style={secondaryButton}>Close</button></section></div>}
       {showMedia && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 700px)", maxHeight: "88vh", overflowY: "auto", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Shared media and files</h2>{sharedMedia.map((item) => <div key={item.id} style={{ display: "grid", gap: 7, padding: 10, borderRadius: 9, background: "#14233a" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}><strong style={{ fontSize: 13 }}>{item.file_name}</strong><small style={{ color: "#8193b1" }}>{(item.size_bytes / 1024 / 1024).toFixed(1)} MB</small></div>{item.mime_type?.startsWith("image/") ? <img src={item.signedUrl} alt={item.file_name} style={{ maxWidth: "100%", maxHeight: 280, objectFit: "contain" }} /> : item.mime_type?.startsWith("video/") ? <video src={item.signedUrl} controls style={{ maxWidth: "100%", maxHeight: 280 }} /> : item.mime_type?.startsWith("audio/") ? <audio src={item.signedUrl} controls style={{ width: "100%" }} /> : <a href={item.signedUrl} target="_blank" rel="noreferrer" style={{ color: "#9db8ff" }}>Open / download file</a>}<small style={{ color: "#8193b1" }}>{new Date(item.created_at).toLocaleString()}</small></div>)}{!sharedMedia.length && <small style={{ color: "#8193b1" }}>No shared files in this conversation yet.</small>}<button onClick={() => setShowMedia(false)} style={secondaryButton}>Close</button></section></div>}
       {showPinned && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 560px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Pinned messages</h2>{pinnedMessages.filter((item) => item.message).map((item) => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", padding: 8, background: "#14233a", borderRadius: 8 }}><span style={{ fontSize: 13 }}>{item.message?.body || "Pinned attachment"}</span>{["owner","admin"].includes(activeConversation?.role ?? "") && <button onClick={() => void unpinMessage(item.id)} style={secondaryButton}>Unpin</button>}</div>)}{!pinnedMessages.some((item) => item.message) && <small style={{ color: "#8193b1" }}>No pinned messages in this conversation.</small>}<button onClick={() => setShowPinned(false)} style={secondaryButton}>Close</button></section></div>}
+      {showMentions && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 560px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Your mentions</h2>{mentionItems.map((item) => { const message = Array.isArray(item.message) ? item.message[0] : item.message; const sender = message && Array.isArray(message.sender) ? message.sender[0] : message?.sender; return message ? <button key={item.message_id} onClick={() => { setActiveId(message.conversation_id); setShowMentions(false); }} style={{ ...secondaryButton, textAlign: "left" }}><strong>{sender?.display_name || "Member"} mentioned you</strong><span style={{ display: "block", marginTop: 5 }}>{message.body || "Attachment or shared content"}</span><small style={{ display: "block", color: "#8193b1", marginTop: 5 }}>{new Date(message.created_at).toLocaleString()}</small></button> : null; })}{!mentionItems.length && <small style={{ color: "#8193b1" }}>No mentions yet. Someone can mention you with @your_username in a conversation.</small>}<button onClick={() => setShowMentions(false)} style={secondaryButton}>Close</button></section></div>}
       {showSaved && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 560px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Saved Messages</h2>{savedMessages.filter((item) => item.message).map((item) => <button key={item.message_id} onClick={() => { setActiveId(item.message!.conversation_id); setShowSaved(false); }} style={{ ...secondaryButton, textAlign: "left" }}><strong>{item.message?.body || "Saved attachment"}</strong><small style={{ display: "block", color: "#8193b1" }}>{new Date(item.message?.created_at || item.created_at).toLocaleString()}</small></button>)}{!savedMessages.some((item) => item.message) && <small style={{ color: "#8193b1" }}>No saved messages yet. Use Save beneath a message to keep it here.</small>}<button onClick={() => setShowSaved(false)} style={secondaryButton}>Close</button></section></div>}
       {forwardMessageId && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 460px)", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Forward message</h2><p style={{ color: "#8193b1", fontSize: 12 }}>Choose a conversation to forward this text message into.</p>{conversations.filter((item) => item.id !== activeId).map((conversation) => <button key={conversation.id} onClick={() => void forwardTo(conversation.id)} style={{ ...secondaryButton, textAlign: "left" }}>{conversation.title || "Conversation"}</button>)}<button onClick={() => setForwardMessageId("")} style={secondaryButton}>Cancel</button></section></div>}
       {showAddStatus && <div style={modalStyle}><form onSubmit={createStatus} style={{ ...panel, width: "min(100%, 460px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Share a status</h2><input type="file" accept="image/*,video/*" onChange={(e) => setStatusFile(e.target.files?.[0] ?? null)} style={{ color: "#cbd8ec" }} /><textarea value={statusCaption} onChange={(e) => setStatusCaption(e.target.value)} maxLength={500} rows={3} placeholder="Add a caption (optional)" style={inputStyle} /><small style={{ color: "#8193b1" }}>Only people who share a conversation with you can view your status. It expires after 24 hours.</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowAddStatus(false)} style={secondaryButton}>Cancel</button><button disabled={!statusFile} style={primaryButton}>Share status</button></div></form></div>}
