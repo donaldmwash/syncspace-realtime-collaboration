@@ -865,31 +865,35 @@ export function Workspace() {
     if (!supabase || !user) return;
     const original = messages.find((item) => item.id === forwardMessageId);
     if (!original) return;
-    const sourceFile = original.attachments?.[0];
-    let copiedPath = "";
-    if (sourceFile) {
+    const sourceFiles = original.attachments ?? [];
+    const copiedFiles: { source: typeof sourceFiles[number]; path: string }[] = [];
+    for (const sourceFile of sourceFiles) {
       const safeName = sourceFile.file_name.replace(/[^\w.\-() ]/g, "_").slice(0, 120) || "forwarded-file";
-      copiedPath = targetId + "/" + user.id + "/" + crypto.randomUUID() + "-" + safeName;
-      const { error: copyError } = await supabase.storage.from("conversation-files").copy(sourceFile.object_path, copiedPath);
-      if (copyError) { setNotice(copyError.message); return; }
+      const path = targetId + "/" + user.id + "/" + crypto.randomUUID() + "-" + safeName;
+      const { error: copyError } = await supabase.storage.from("conversation-files").copy(sourceFile.object_path, path);
+      if (copyError) {
+        if (copiedFiles.length) await supabase.storage.from("conversation-files").remove(copiedFiles.map((item) => item.path));
+        setNotice(copyError.message); return;
+      }
+      copiedFiles.push({ source: sourceFile, path });
     }
-    if (!original.body && !sourceFile) { setNotice("This message cannot be forwarded."); return; }
+    if (!original.body && !sourceFiles.length) { setNotice("This message cannot be forwarded."); return; }
     const { data: forwarded, error } = await supabase.from("messages").insert({
-      conversation_id: targetId, sender_id: user.id, body: original.body || sourceFile?.file_name || "",
+      conversation_id: targetId, sender_id: user.id, body: original.body || sourceFiles.map((file) => file.file_name).join(", "),
       message_type: original.message_type, forwarded_from_id: original.id,
     }).select("id").single();
     if (error) {
-      if (copiedPath) await supabase.storage.from("conversation-files").remove([copiedPath]);
+      if (copiedFiles.length) await supabase.storage.from("conversation-files").remove(copiedFiles.map((item) => item.path));
       setNotice(error.message); return;
     }
-    if (sourceFile) {
-      const { error: attachmentError } = await supabase.from("attachments").insert({
+    if (copiedFiles.length) {
+      const { error: attachmentError } = await supabase.from("attachments").insert(copiedFiles.map(({ source, path }) => ({
         message_id: forwarded.id, conversation_id: targetId, uploaded_by: user.id,
-        bucket_id: "conversation-files", object_path: copiedPath,
-        file_name: sourceFile.file_name, mime_type: sourceFile.mime_type, size_bytes: sourceFile.size_bytes,
-      });
+        bucket_id: "conversation-files", object_path: path,
+        file_name: source.file_name, mime_type: source.mime_type, size_bytes: source.size_bytes,
+      })));
       if (attachmentError) {
-        await supabase.storage.from("conversation-files").remove([copiedPath]);
+        await supabase.storage.from("conversation-files").remove(copiedFiles.map((item) => item.path));
         await supabase.from("messages").update({ deleted_at: new Date().toISOString(), body: "Forward failed." }).eq("id", forwarded.id).eq("sender_id", user.id);
         setNotice(attachmentError.message); return;
       }
