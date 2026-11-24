@@ -10,6 +10,7 @@ type ChatMessage = {
   createdAt: string;
   editedAt?: string;
   attachment?: { id: string; name: string; size: number; type: string };
+  replyTo?: { id: string; sender: string; text: string; attachmentName?: string };
 };
 
 type StoredFile = { roomId: string; name: string; type: string; bytes: Buffer };
@@ -63,20 +64,28 @@ io.on("connection", (socket) => {
     io.sockets.adapter.rooms.get(roomId)?.size ?? 1,
   );
 
-  socket.on("chat:send", (payload: { text?: unknown }) => {
+  socket.on("chat:send", (payload: { text?: unknown; replyToId?: unknown }) => {
     if (typeof payload?.text !== "string") return;
     const text = payload.text.trim().slice(0, 2000);
     if (!text) return;
 
+    const history = roomMessages.get(roomId) ?? [];
+    const repliedMessage = typeof payload.replyToId === "string" ? history.find((item) => item.id === payload.replyToId) : undefined;
+    const replyTo = repliedMessage ? {
+      id: repliedMessage.id,
+      sender: repliedMessage.sender,
+      text: repliedMessage.text.slice(0, 180),
+      ...(repliedMessage.attachment ? { attachmentName: repliedMessage.attachment.name } : {}),
+    } : undefined;
     const message: ChatMessage = {
       id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
       sender: displayName,
       senderId: authorId,
       text,
       createdAt: new Date().toISOString(),
+      ...(replyTo ? { replyTo } : {}),
     };
 
-    const history = roomMessages.get(roomId) ?? [];
     history.push(message);
     if (history.length > 200) history.splice(0, history.length - 200);
     roomMessages.set(roomId, history);
