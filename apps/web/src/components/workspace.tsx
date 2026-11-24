@@ -16,6 +16,7 @@ type Conversation = {
   role?: string;
 };
 type ConversationTopic = { id: string; name: string; description: string | null };
+type ConversationFolder = { id: string; name: string; position: number };
 type StatusItem = { id: string; user_id: string; media_path: string; media_type: string | null; caption: string | null; expires_at: string; created_at: string; owner?: { display_name: string; avatar_url?: string | null }; signedUrl?: string };
 type Attachment = { id: string; file_name: string; mime_type: string | null; size_bytes: number; object_path: string; signedUrl?: string };
 type Poll = { id: string; question: string; allows_multiple: boolean; closes_at: string | null; poll_options: { id: string; label: string; position: number }[]; poll_votes: { option_id: string; user_id: string }[] };
@@ -91,6 +92,11 @@ export function Workspace() {
   const [forwardMessageId, setForwardMessageId] = useState("");
   const [showSaved, setShowSaved] = useState(false);
   const [showPinned, setShowPinned] = useState(false);
+  const [showFolders, setShowFolders] = useState(false);
+  const [folders, setFolders] = useState<ConversationFolder[]>([]);
+  const [folderAssignments, setFolderAssignments] = useState<Record<string,string>>({});
+  const [selectedFolderId, setSelectedFolderId] = useState("");
+  const [newFolderName, setNewFolderName] = useState("");
   const [pinnedMessages, setPinnedMessages] = useState<{id:string;message_id:string;message?:{id:string;body:string|null;conversation_id:string;created_at:string}}[]>([]);
   const [savedMessages, setSavedMessages] = useState<{message_id:string;created_at:string;message?:{id:string;body:string|null;conversation_id:string;created_at:string}}[]>([]);
   const [showSchedule, setShowSchedule] = useState(false);
@@ -297,6 +303,8 @@ export function Workspace() {
     })();
   }, [user, supabase, pendingInvite, loadConversations]);
 
+
+  useEffect(() => { if (user && supabase) void loadFolders(); }, [user, supabase]);
 
   useEffect(() => {
     if (!supabase || !activeId) { setConversationMembers([]); return; }
@@ -610,6 +618,41 @@ export function Workspace() {
 
 
 
+
+  async function loadFolders() {
+    if (!supabase || !user) return;
+    const { data: folderRows, error } = await supabase.from("conversation_folders").select("id,name,position").eq("user_id", user.id).order("position");
+    if (error) { setNotice(error.message); return; }
+    const { data: items } = await supabase.from("conversation_folder_items").select("folder_id,conversation_id");
+    setFolders((folderRows ?? []) as ConversationFolder[]);
+    setFolderAssignments(Object.fromEntries((items ?? []).map((item: any) => [item.conversation_id, item.folder_id])));
+  }
+
+  async function createFolder(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !user || !newFolderName.trim()) return;
+    const { data, error } = await supabase.from("conversation_folders").insert({ user_id: user.id, name: newFolderName.trim().slice(0, 40), position: folders.length }).select("id,name,position").single();
+    if (error) setNotice(error.message);
+    else { setFolders((current) => [...current, data]); setNewFolderName(""); setNotice("Folder created."); }
+  }
+
+  async function assignActiveConversation(folderId: string) {
+    if (!supabase || !activeConversation) return;
+    const { error: deleteError } = await supabase.from("conversation_folder_items").delete().eq("conversation_id", activeConversation.id);
+    if (deleteError) { setNotice(deleteError.message); return; }
+    if (folderId) {
+      const { error } = await supabase.from("conversation_folder_items").insert({ folder_id: folderId, conversation_id: activeConversation.id });
+      if (error) { setNotice(error.message); return; }
+    }
+    setFolderAssignments((current) => {
+      const next = { ...current };
+      if (folderId) next[activeConversation.id] = folderId;
+      else delete next[activeConversation.id];
+      return next;
+    });
+    setNotice(folderId ? "Conversation added to folder." : "Conversation removed from folders.");
+  }
+
   async function openPinnedMessages() {
     if (!supabase || !activeConversation) return;
     const { data: pins, error } = await supabase.from("message_pins").select("id,message_id").eq("conversation_id", activeConversation.id).order("created_at", { ascending: false });
@@ -911,7 +954,7 @@ export function Workspace() {
           </div>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search messages…" style={{ ...inputStyle, marginBottom: 12 }} />
           <div style={{ display: "flex", gap: 7, margin: "4px 0 12px" }}><button onClick={() => setShowAddStatus(true)} style={{ ...secondaryButton, flex: 1 }}>＋ Add status</button><button onClick={() => { void refreshStatuses(); setShowStatuses(true); }} style={{ ...secondaryButton, flex: 1 }}>Status · {statuses.length}</button></div>
-          <button onClick={() => void openSavedMessages()} style={{ ...secondaryButton, width: "100%", marginBottom: 10, textAlign: "left" }}>★ Saved Messages</button>
+          <button onClick={() => void openSavedMessages()} style={{ ...secondaryButton, width: "100%", marginBottom: 7, textAlign: "left" }}>★ Saved Messages</button><button onClick={() => setShowFolders(true)} style={{ ...secondaryButton, width: "100%", marginBottom: 7, textAlign: "left" }}>Folders · {folders.length}</button><div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 9 }}><button onClick={() => setSelectedFolderId("")} style={{ ...secondaryButton, padding: "5px 8px", background: !selectedFolderId ? "#263f68" : undefined }}>All</button>{folders.map((folder) => <button key={folder.id} onClick={() => setSelectedFolderId(folder.id)} style={{ ...secondaryButton, padding: "5px 8px", background: selectedFolderId === folder.id ? "#263f68" : undefined }}>{folder.name}</button>)}</div>
           <div style={{ color: "#7184a3", fontSize: 11, letterSpacing: 1.5, margin: "8px 0" }}>YOUR CONVERSATIONS</div>
           <div style={{ display: "grid", gap: 7, overflowY: "auto" }}>
             {conversations.map((conversation) => (
@@ -977,6 +1020,7 @@ export function Workspace() {
       </div>
 
       {showPasswordRecovery && <div style={modalStyle}><form onSubmit={updateRecoveredPassword} style={{ ...panel, width: "min(100%, 420px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Choose a new password</h2><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} required placeholder="New password (8+ characters)" style={inputStyle} /><button disabled={busy} style={primaryButton}>Update password</button><p style={{ color: "#8193b1", fontSize: 12 }}>{notice}</p></form></div>}
+      {showFolders && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 480px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Conversation folders</h2><form onSubmit={createFolder} style={{ display: "flex", gap: 8 }}><input value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} maxLength={40} placeholder="New folder name" required style={inputStyle} /><button style={primaryButton}>Create</button></form>{activeConversation && <div style={{ display: "grid", gap: 7 }}><strong style={{ fontSize: 12 }}>Organise current conversation</strong><select value={folderAssignments[activeConversation.id] || ""} onChange={(e) => void assignActiveConversation(e.target.value)} style={inputStyle}><option value="">No folder</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></div>}<button onClick={() => setShowFolders(false)} style={secondaryButton}>Close</button></section></div>}
       {showPinned && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 560px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Pinned messages</h2>{pinnedMessages.filter((item) => item.message).map((item) => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", padding: 8, background: "#14233a", borderRadius: 8 }}><span style={{ fontSize: 13 }}>{item.message?.body || "Pinned attachment"}</span>{["owner","admin"].includes(activeConversation?.role ?? "") && <button onClick={() => void unpinMessage(item.id)} style={secondaryButton}>Unpin</button>}</div>)}{!pinnedMessages.some((item) => item.message) && <small style={{ color: "#8193b1" }}>No pinned messages in this conversation.</small>}<button onClick={() => setShowPinned(false)} style={secondaryButton}>Close</button></section></div>}
       {showSaved && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 560px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Saved Messages</h2>{savedMessages.filter((item) => item.message).map((item) => <button key={item.message_id} onClick={() => { setActiveId(item.message!.conversation_id); setShowSaved(false); }} style={{ ...secondaryButton, textAlign: "left" }}><strong>{item.message?.body || "Saved attachment"}</strong><small style={{ display: "block", color: "#8193b1" }}>{new Date(item.message?.created_at || item.created_at).toLocaleString()}</small></button>)}{!savedMessages.some((item) => item.message) && <small style={{ color: "#8193b1" }}>No saved messages yet. Use Save beneath a message to keep it here.</small>}<button onClick={() => setShowSaved(false)} style={secondaryButton}>Close</button></section></div>}
       {forwardMessageId && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 460px)", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Forward message</h2><p style={{ color: "#8193b1", fontSize: 12 }}>Choose a conversation to forward this text message into.</p>{conversations.filter((item) => item.id !== activeId).map((conversation) => <button key={conversation.id} onClick={() => void forwardTo(conversation.id)} style={{ ...secondaryButton, textAlign: "left" }}>{conversation.title || "Conversation"}</button>)}<button onClick={() => setForwardMessageId("")} style={secondaryButton}>Cancel</button></section></div>}
