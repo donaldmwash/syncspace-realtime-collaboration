@@ -15,6 +15,7 @@ type ChatMessage = {
   createdAt: string;
   editedAt?: string;
   attachment?: { id: string; name: string; size: number; type: string };
+  replyTo?: { id: string; sender: string; text: string; attachmentName?: string };
 };
 
 export function Workspace() {
@@ -28,6 +29,7 @@ export function Workspace() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [notice, setNotice] = useState("Choose a display name to join the conversation.");
   const socketRef = useRef<Socket | null>(null);
   const authorIdRef = useRef("");
@@ -116,8 +118,9 @@ export function Workspace() {
     const text = draft.trim();
     const socket = socketRef.current;
     if (!text || !socket?.connected) return;
-    socket.emit("chat:send", { text });
+    socket.emit("chat:send", { text, ...(replyingTo ? { replyToId: replyingTo.id } : {}) });
     setDraft("");
+    setReplyingTo(null);
   }
 
   async function uploadFile(event: ChangeEvent<HTMLInputElement>) {
@@ -183,6 +186,7 @@ export function Workspace() {
     setJoined(false);
     setConnected(false);
     setMessages([]);
+    setReplyingTo(null);
     setName("");
     setNotice("Choose a display name to join the conversation.");
   }
@@ -243,6 +247,12 @@ export function Workspace() {
                       <strong style={{ color: mine ? "#9db8ff" : "#8ce0b0", fontSize: 12 }}>{message.sender}{mine ? " (you)" : ""}</strong>
                       <time style={{ color: "#7184a3", fontSize: 10 }}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{message.editedAt ? " · Edited" : ""}</time>
                     </div>
+                    {message.replyTo && (
+                      <div style={{ borderLeft: "3px solid #86a8ff", background: "#111f34", borderRadius: "8px 8px 0 0", padding: "8px 11px", marginBottom: 5, color: "#aebfda", fontSize: 11 }}>
+                        <strong style={{ display: "block", color: "#9db8ff", marginBottom: 3 }}>Replying to {message.replyTo.sender}</strong>
+                        <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{message.replyTo.attachmentName ? `📎 ${message.replyTo.attachmentName}` : message.replyTo.text}</span>
+                      </div>
+                    )}
                     {editing ? (
                       <div style={{ background: "#1a2940", borderRadius: 14, padding: 10 }}>
                         <textarea value={editDraft} onChange={(event) => setEditDraft(event.target.value)} maxLength={2000} aria-label="Edit message" style={{ width: "100%", minHeight: 76, resize: "vertical", padding: 10, borderRadius: 8, border: "1px solid #354663", background: "#0d1727", color: "#e7eefb" }} />
@@ -266,6 +276,11 @@ export function Workspace() {
                     ) : (
                       <div style={{ background: mine ? "#20365c" : "#1a2940", color: "#e7eefb", borderRadius: 14, padding: "11px 14px", lineHeight: 1.6, fontSize: 14, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{message.text}</div>
                     )}
+                    {!editing && (
+                      <div style={{ display: "flex", justifyContent: mine ? "flex-end" : "flex-start", gap: 10, margin: "6px 4px 0" }}>
+                        <button type="button" onClick={() => { setReplyingTo(message); setNotice(`Replying to ${message.sender}`); }} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>↩ Reply</button>
+                      </div>
+                    )}
                     {mine && !editing && (
                       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, margin: "6px 4px 0" }}>
                         {!message.attachment && <button type="button" onClick={() => { setEditingId(message.id); setEditDraft(message.text); }} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Edit</button> }
@@ -278,6 +293,15 @@ export function Workspace() {
               <div ref={bottomRef} />
             </div>
 
+            {replyingTo && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 16px", background: "#14233a", borderTop: "1px solid #26334b" }}>
+                <div style={{ minWidth: 0, borderLeft: "3px solid #86a8ff", paddingLeft: 10 }}>
+                  <strong style={{ display: "block", color: "#9db8ff", fontSize: 12 }}>Replying to {replyingTo.sender}</strong>
+                  <span style={{ display: "block", color: "#aebfda", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{replyingTo.attachment ? `📎 ${replyingTo.attachment.name}` : replyingTo.text}</span>
+                </div>
+                <button type="button" onClick={() => setReplyingTo(null)} aria-label="Cancel reply" style={{ border: 0, background: "transparent", color: "#cbd8ec", fontSize: 18, cursor: "pointer" }}>×</button>
+              </div>
+            )}
             <form onSubmit={sendMessage} style={{ display: "flex", gap: 10, padding: 16, borderTop: "1px solid #26334b", background: "#0d1727", alignItems: "center" }}>
               <input ref={fileInputRef} type="file" onChange={uploadFile} disabled={!connected || uploading} style={{ display: "none" }} aria-label="Choose an attachment" />
               <button type="button" onClick={() => fileInputRef.current?.click()} disabled={!connected || uploading} title="Attach a file (5 MB maximum)" style={{ padding: "0 14px", minHeight: 46, border: "1px solid #354663", borderRadius: 10, background: "#17243a", color: "#cbd8ec", fontSize: 20, cursor: "pointer" }}>{uploading ? "…" : "＋"}</button>
