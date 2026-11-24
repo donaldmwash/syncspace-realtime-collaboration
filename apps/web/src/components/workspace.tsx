@@ -112,7 +112,19 @@ export function Workspace() {
       .select("conversation_id, role, conversations(id,type,title,description,is_private,is_announcement_only,last_message_at)")
       .eq("user_id", currentUser.id);
     if (error) { setNotice(error.message); return; }
-    const list = (data ?? []).map((row: any) => ({ ...row.conversations, role: row.role })).filter((item: any) => item?.id) as Conversation[];
+    let list = (data ?? []).map((row: any) => ({ ...row.conversations, role: row.role })).filter((item: any) => item?.id) as Conversation[];
+    const directIds = list.filter((item) => item.type === "direct").map((item) => item.id);
+    if (directIds.length) {
+      const { data: peers } = await supabase.from("conversation_members").select("conversation_id,user_id").in("conversation_id", directIds).neq("user_id", currentUser.id);
+      const peerIds = [...new Set((peers ?? []).map((peer: any) => peer.user_id))];
+      const { data: peerProfiles } = peerIds.length ? await supabase.from("profiles").select("id,display_name").in("id", peerIds) : { data: [] };
+      list = list.map((item) => {
+        if (item.type !== "direct") return item;
+        const peer = (peers ?? []).find((entry: any) => entry.conversation_id === item.id);
+        const profile = (peerProfiles ?? []).find((entry: any) => entry.id === peer?.user_id);
+        return { ...item, title: profile?.display_name ?? item.title };
+      });
+    }
     list.sort((a, b) => {
       if (a.id === LOUNGE_ID) return -1;
       if (b.id === LOUNGE_ID) return 1;
@@ -409,6 +421,15 @@ export function Workspace() {
 
   async function startDirect(member: any) {
     if (!supabase || !user) return;
+    const { data: blocked } = await supabase.from("user_blocks").select("id").eq("blocker_id", user.id).eq("blocked_id", member.id).maybeSingle();
+    if (blocked) { setNotice("Unblock this person before starting a direct conversation."); return; }
+    const directIds = conversations.filter((item) => item.type === "direct").map((item) => item.id);
+    if (directIds.length) {
+      const { data: existing } = await supabase.from("conversation_members").select("conversation_id").eq("user_id", member.id).in("conversation_id", directIds).limit(1);
+      if (existing?.[0]?.conversation_id) {
+        setShowMembers(false); setActiveId(existing[0].conversation_id); setNotice("Opened your existing direct conversation."); return;
+      }
+    }
     const { data: conversation, error } = await supabase.from("conversations").insert({
       type: "direct", title: member.display_name, created_by: user.id, is_private: true,
     }).select("id,type,title,description,is_private,is_announcement_only,last_message_at").single();
