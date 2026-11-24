@@ -54,7 +54,7 @@ This tracker distinguishes database groundwork from user-facing, tested function
 ## Phase 4 — Privacy and community safety
 
 - [x] 24-hour image/video status updates with contact-scoped storage and automatic cleanup.
-- [ ] Disappearing messages within conversations.
+- [x] Conversation-level disappearing messages with scheduled storage cleanup.
 - [~] Account blocking and report submission are implemented; report review queues, spam protection, admin moderation and audit trails remain outstanding.
 - [ ] Session/device management and privacy settings.
 - [ ] Backup/export and account recovery hardening.
