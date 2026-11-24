@@ -242,7 +242,7 @@ export function Workspace() {
       if (!deviceId) { deviceId = crypto.randomUUID(); window.localStorage.setItem(deviceKey, deviceId); }
       setCurrentDeviceId(deviceId);
       const deviceName = (navigator.userAgent || "Browser").slice(0, 120);
-      const platform = (navigator.userAgentData?.platform || navigator.platform || "Web").slice(0, 80);
+      const platform = ((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform || "Web").slice(0, 80);
       const { error: deviceError } = await supabase.from("user_devices").upsert({ id: deviceId, user_id: user.id, device_name: deviceName, platform, last_seen_at: new Date().toISOString() }, { onConflict: "id" });
       if (deviceError) setNotice("Device registration: " + deviceError.message);
       setShowLastSeen(profile?.show_last_seen ?? true);
