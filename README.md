@@ -16,7 +16,7 @@ The `feature/syncspace-2-auth-foundation` branch connects the web client to the 
 - Persistent messages, replies, sender-only edits/deletes, reactions and read receipts.
 - Typing indicators and online presence.
 - Private conversation file storage (50 MB per file), with membership-checked access and image/video/audio previews.
-- Saved Messages browsing and admin-only pinned-message management.
+- Saved Messages browsing, admin-only pinned-message management and personal conversation folders.
 - Message forwarding across conversations, including copying attachment objects into the destination conversation.
 - Browser microphone recording and delivery of voice messages.
 - Group/channel invite links with 7-day expiry, a 50-join cap, revocation and JWT-verified Edge Function redemption.
@@ -25,7 +25,7 @@ The `feature/syncspace-2-auth-foundation` branch connects the web client to the 
 - 24-hour image/video status updates with contact-scoped private media and automatic expiry cleanup.
 - Account blocking (direct-message restrictions and hidden blocked-user messages) and report submission.
 
-Some controls are intentionally not presented as finished features yet: Full report moderation, server-side full-history search, shared-media browser, contact/location sharing, link previews, conversation folders, calls, bots, device management, export/backup and end-to-end encryption remain outstanding.
+Some controls are intentionally not presented as finished features yet: Full report moderation, server-side full-history search, shared-media browser, contact/location sharing, link previews, calls, bots, device management, export/backup and end-to-end encryption remain outstanding.
 
 ## Local setup
 
