@@ -304,14 +304,14 @@ export function Workspace() {
 
   async function pinMessage(message: Message) {
     if (!supabase || !user || !activeConversation) return;
-    const { error } = await supabase.from("message_pins").upsert({ conversation_id: activeConversation.id, message_id: message.id, pinned_by: user.id });
-    setNotice(error ? error.message : "Message pinned.");
+    const { error } = await supabase.from("message_pins").insert({ conversation_id: activeConversation.id, message_id: message.id, pinned_by: user.id });
+    setNotice(error ? (error.code === "23505" ? "That message is already pinned." : error.message) : "Message pinned.");
   }
 
   async function saveMessage(message: Message) {
     if (!supabase || !user) return;
-    const { error } = await supabase.from("saved_messages").upsert({ user_id: user.id, message_id: message.id });
-    setNotice(error ? error.message : "Message saved to your Saved Messages.");
+    const { error } = await supabase.from("saved_messages").insert({ user_id: user.id, message_id: message.id });
+    setNotice(error ? (error.code === "23505" ? "That message is already saved." : error.message) : "Message saved to your Saved Messages.");
   }
 
   async function uploadFile(event: ChangeEvent<HTMLInputElement>) {
@@ -376,7 +376,7 @@ export function Workspace() {
 
   return (
     <main style={{ minHeight: "100vh", padding: 16, color: "#e7eefb" }}>
-      <div style={{ maxWidth: 1400, minHeight: "calc(100vh - 32px)", margin: "0 auto", display: "grid", gridTemplateColumns: "minmax(250px, 320px) minmax(0, 1fr)", gap: 14 }}>
+      <div className="syncspace-layout" style={{ maxWidth: 1400, minHeight: "calc(100vh - 32px)", margin: "0 auto", display: "grid", gridTemplateColumns: "minmax(250px, 320px) minmax(0, 1fr)", gap: 14 }}>
         <aside style={{ ...panel, padding: 18, display: "flex", flexDirection: "column", minHeight: 600 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div><div style={{ color: "#8ea7d7", fontSize: 11, letterSpacing: 3 }}>SYNCSPACE</div><h1 style={{ fontSize: 24, margin: "7px 0 0" }}>Messages</h1></div>
