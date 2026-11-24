@@ -49,7 +49,8 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [ ] Albums, contact/location/live-location sharing, link previews and shared-media browser.
 - [x] Personal conversation folders.
 - [x] Draft synchronization across sessions.
-- [ ] Mentions and shared-media browser.
+- [x] Shared-media browser.
+- [ ] Mentions.
 - [x] Poll creation/voting with single-choice enforcement in the database.
 - [x] Scheduled text messages with an active one-minute Supabase Cron dispatcher.
 
