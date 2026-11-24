@@ -61,7 +61,8 @@ This tracker distinguishes database groundwork from user-facing, tested function
 
 - [x] 24-hour image/video status updates with contact-scoped storage and automatic cleanup.
 - [x] Conversation-level disappearing messages with scheduled storage cleanup.
-- [x] Per-user message rate limiting (30 messages per minute) to reduce basic spam bursts.\n- [~] Account blocking and report submission are implemented; report review queues, advanced spam protection, admin moderation and audit trails remain outstanding.
+- [x] Per-user message rate limiting (30 messages per minute) to reduce basic spam bursts.
+- [~] Account blocking and report submission are implemented; report review queues, advanced spam protection, admin moderation and audit trails remain outstanding.
 - [~] Profile presence privacy preferences are stored; last-seen visibility is not yet enforced across profile reads.
 - [~] Device registration and sign-out-other-sessions; individual session revocation and full session inventory remain outstanding.
 - [x] Conversation-history JSON export with attachment metadata (file bytes are not included).
@@ -73,7 +74,8 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [ ] WebRTC audio/video calls with signaling, TURN/STUN and reconnect handling.
 - [ ] Push notifications and multi-device synchronization.
 - [ ] Bot/automation API with scoped permissions and abuse controls.
-- [x] Basic channel analytics for owners/admins (member count, total posts, last-30-day posts and shared files).\n- [ ] Broader operational dashboards and channel engagement analytics.
+- [x] Basic channel analytics for owners/admins (member count, total posts, last-30-day posts and shared files).
+- [ ] Broader operational dashboards and channel engagement analytics.
 - [ ] Load, security, accessibility and disaster-recovery testing.
 
 ## Release rule
