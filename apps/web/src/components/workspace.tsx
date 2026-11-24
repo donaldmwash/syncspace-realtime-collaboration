@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 
 const REALTIME_URL =
@@ -120,7 +120,7 @@ export function Workspace() {
     setDraft("");
   }
 
-  async function uploadFile(event: React.ChangeEvent<HTMLInputElement>) {
+  async function uploadFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
