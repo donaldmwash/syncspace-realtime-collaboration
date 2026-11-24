@@ -1081,32 +1081,50 @@ export function Workspace() {
   }
 
   async function uploadFile(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
+    const files = Array.from(event.target.files ?? []);
     event.target.value = "";
-    if (!file || !supabase || !user || !activeConversation) return;
-    if (/\.(exe|dll|bat|cmd|ps1|sh|msi|apk|com|scr|vbs|js|html?|svg|jar)$/i.test(file.name) || file.type === "image/svg+xml") { setNotice("This potentially executable file type is blocked."); return; }
-    if (file.size > 50 * 1024 * 1024) { setNotice("Files must be 50 MB or smaller."); return; }
+    if (!files.length || !supabase || !user || !activeConversation) return;
+    if (files.length > 10) { setNotice("Share up to 10 files in one album."); return; }
+    const totalSize = files.reduce((total, file) => total + file.size, 0);
+    if (files.some((file) => /\.(exe|dll|bat|cmd|ps1|sh|msi|apk|com|scr|vbs|js|html?|svg|jar)$/i.test(file.name) || file.type === "image/svg+xml")) { setNotice("This potentially executable file type is blocked."); return; }
+    if (files.some((file) => file.size > 50 * 1024 * 1024) || totalSize > 100 * 1024 * 1024) { setNotice("Each file must be 50 MB or smaller and an album must total 100 MB or less."); return; }
     setUploading(true);
-    const safeName = file.name.replace(/[^\w.\-() ]/g, "_").slice(0, 120) || "attachment";
-    const path = activeConversation.id + "/" + user.id + "/" + crypto.randomUUID() + "-" + safeName;
-    const { error: uploadError } = await supabase.storage.from("conversation-files").upload(path, file, { contentType: file.type || "application/octet-stream", upsert: false });
-    if (uploadError) { setNotice(uploadError.message); setUploading(false); return; }
-    const type = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : file.type.startsWith("audio/") ? "audio" : "file";
+    const uploaded: { path:string; file:File; safeName:string }[] = [];
+    for (const file of files) {
+      const safeName = file.name.replace(/[^\w.\-() ]/g, "_").slice(0, 120) || "attachment";
+      const path = activeConversation.id + "/" + user.id + "/" + crypto.randomUUID() + "-" + safeName;
+      const { error } = await supabase.storage.from("conversation-files").upload(path, file, { contentType: file.type || "application/octet-stream", upsert: false });
+      if (error) {
+        if (uploaded.length) await supabase.storage.from("conversation-files").remove(uploaded.map((item) => item.path));
+        setNotice(error.message); setUploading(false); return;
+      }
+      uploaded.push({ path, file, safeName });
+    }
+    const allImages = files.every((file) => file.type.startsWith("image/"));
+    const allVideos = files.every((file) => file.type.startsWith("video/"));
+    const messageType = allImages ? "image" : allVideos ? "video" : files.length === 1 && files[0].type.startsWith("audio/") ? "audio" : "file";
+    const body = files.length === 1 ? files[0].name : "Shared " + files.length + " attachments";
     const { data: message, error: messageError } = await supabase.from("messages").insert({
-      conversation_id: activeConversation.id, sender_id: user.id, body: file.name,
-      message_type: type, reply_to_id: replyTo?.id ?? null, topic_id: topicId || null,
+      conversation_id: activeConversation.id, sender_id: user.id, body,
+      message_type: messageType, reply_to_id: replyTo?.id ?? null, topic_id: topicId || null,
     }).select("id").single();
     if (messageError) {
-      await supabase.storage.from("conversation-files").remove([path]);
+      await supabase.storage.from("conversation-files").remove(uploaded.map((item) => item.path));
       setNotice(messageError.message); setUploading(false); return;
     }
-    const { error: attachmentError } = await supabase.from("attachments").insert({
+    const { error: attachmentError } = await supabase.from("attachments").insert(uploaded.map(({ path, file }) => ({
       message_id: message.id, conversation_id: activeConversation.id, uploaded_by: user.id,
       bucket_id: "conversation-files", object_path: path, file_name: file.name,
       mime_type: file.type || "application/octet-stream", size_bytes: file.size,
-    });
-    if (attachmentError) setNotice("File uploaded, but attachment metadata failed: " + attachmentError.message);
-    else { setNotice("Attachment shared."); setReplyTo(null); await loadMessages(activeId); }
+    })));
+    if (attachmentError) {
+      await supabase.storage.from("conversation-files").remove(uploaded.map((item) => item.path));
+      await supabase.from("messages").delete().eq("id", message.id).eq("sender_id", user.id);
+      setNotice("The album could not be saved: " + attachmentError.message);
+    } else {
+      setNotice(files.length > 1 ? "Album shared with " + files.length + " files." : "Attachment shared.");
+      setReplyTo(null); await loadMessages(activeId);
+    }
     setUploading(false);
   }
 
@@ -1179,18 +1197,20 @@ export function Workspace() {
             <div aria-live="polite" style={{ flex: 1, minHeight: 400, maxHeight: "calc(100vh - 230px)", overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
               {visibleMessages.map((message) => {
                 const mine = message.sender_id === user.id;
-                const file = message.attachments?.[0];
+                const files = message.attachments ?? [];
                 const poll = Array.isArray(message.polls) ? message.polls[0] : message.polls;
                 const reply = Array.isArray(message.reply) ? message.reply[0] : message.reply;
                 return <article key={message.id} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "min(82%, 720px)", minWidth: 130 }}>
                   <div style={{ color: mine ? "#9db8ff" : "#8ce0b0", fontSize: 11, margin: "0 5px 5px" }}>{message.forwarded_from_id ? "↪ Forwarded · " : ""}{mine ? "You" : message.sender?.display_name || "Member"}{message.topic && <span> · #{(Array.isArray(message.topic) ? message.topic[0] : message.topic)?.name}</span>} · {new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{message.edited_at ? " · Edited" : ""}{mine && message.receipts?.some((receipt) => receipt.read_at) ? " · ✓✓ Read" : ""}</div>
                   {reply && <div style={{ padding: "7px 10px", borderLeft: "3px solid #86a8ff", background: "#111f34", borderRadius: 7, color: "#aebfda", fontSize: 11, marginBottom: 4 }}>Replying to {reply.sender?.display_name || "member"}: {(reply.body || "Attachment").slice(0, 120)}</div>}
                   {editingId === message.id ? <div style={{ ...panel, padding: 9 }}><textarea value={editDraft} onChange={(e) => setEditDraft(e.target.value)} style={{ ...inputStyle, minHeight: 80 }} /><div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}><button onClick={() => setEditingId("")} style={secondaryButton}>Cancel</button><button onClick={() => void editMessage(message.id)} style={primaryButton}>Save</button></div></div> : <div style={{ background: mine ? "#20365c" : "#1a2940", borderRadius: 13, padding: "11px 14px", lineHeight: 1.6, overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>
-                    {message.message_type === "location" ? <a href={message.body || "#"} target="_blank" rel="noreferrer" style={{ color: "#9db8ff" }}>📍 Open shared location in Maps</a> : poll ? <div style={{ display: "grid", gap: 9, minWidth: 230 }}><strong>{poll.question}</strong>{[...poll.poll_options].sort((a,b) => a.position-b.position).map((option) => { const count = poll.poll_votes.filter((vote) => vote.option_id === option.id).length; const selected = poll.poll_votes.some((vote) => vote.option_id === option.id && vote.user_id === user.id); const total = poll.poll_votes.length; return <button key={option.id} onClick={() => void votePoll(poll, option.id)} disabled={!!poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now()} style={{ textAlign: "left", padding: 9, borderRadius: 8, border: "1px solid " + (selected ? "#86a8ff" : "#40516c"), background: selected ? "#263f68" : "#15243a", color: "#e7eefb" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>{selected ? "✓ " : ""}{option.label}</span><small>{count}</small></div><div style={{ height: 4, background: "#34445d", borderRadius: 5, marginTop: 7 }}><div style={{ width: (total ? Math.round(count / total * 100) : 0) + "%", height: "100%", background: "#86a8ff", borderRadius: 5 }} /></div></button>; })}<small style={{ color: "#aebfda" }}>{poll.poll_votes.length} vote(s) · {poll.allows_multiple ? "Multiple answers" : "Choose one"}{poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now() ? " · Closed" : ""}</small></div> : file ? <div style={{ display: "grid", gap: 7 }}>
-                      {file.mime_type?.startsWith("image/") && file.signedUrl && <a href={file.signedUrl} target="_blank" rel="noreferrer"><img src={file.signedUrl} alt={file.file_name} style={{ maxWidth: "100%", maxHeight: 300, borderRadius: 8 }} /></a>}
-                      {file.mime_type?.startsWith("video/") && file.signedUrl && <video src={file.signedUrl} controls style={{ maxWidth: "100%", maxHeight: 320 }} />}
-                      {file.mime_type?.startsWith("audio/") && file.signedUrl && <audio src={file.signedUrl} controls />}
-                      <a href={file.signedUrl} target="_blank" rel="noreferrer" style={{ color: "#c8d8ff" }}>📎 {file.file_name}</a><small style={{ color: "#aebfda" }}>{(file.size_bytes / 1024 / 1024).toFixed(2)} MB</small>
+                    {message.message_type === "location" ? <a href={message.body || "#"} target="_blank" rel="noreferrer" style={{ color: "#9db8ff" }}>📍 Open shared location in Maps</a> : poll ? <div style={{ display: "grid", gap: 9, minWidth: 230 }}><strong>{poll.question}</strong>{[...poll.poll_options].sort((a,b) => a.position-b.position).map((option) => { const count = poll.poll_votes.filter((vote) => vote.option_id === option.id).length; const selected = poll.poll_votes.some((vote) => vote.option_id === option.id && vote.user_id === user.id); const total = poll.poll_votes.length; return <button key={option.id} onClick={() => void votePoll(poll, option.id)} disabled={!!poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now()} style={{ textAlign: "left", padding: 9, borderRadius: 8, border: "1px solid " + (selected ? "#86a8ff" : "#40516c"), background: selected ? "#263f68" : "#15243a", color: "#e7eefb" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>{selected ? "✓ " : ""}{option.label}</span><small>{count}</small></div><div style={{ height: 4, background: "#34445d", borderRadius: 5, marginTop: 7 }}><div style={{ width: (total ? Math.round(count / total * 100) : 0) + "%", height: "100%", background: "#86a8ff", borderRadius: 5 }} /></div></button>; })}<small style={{ color: "#aebfda" }}>{poll.poll_votes.length} vote(s) · {poll.allows_multiple ? "Multiple answers" : "Choose one"}{poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now() ? " · Closed" : ""}</small></div> : files.length ? <div style={{ display: "grid", gridTemplateColumns: files.length > 1 ? "repeat(2,minmax(0,1fr))" : "minmax(0,1fr)", gap: 8 }}>
+                      {files.map((file) => <div key={file.id} style={{ minWidth: 0, display: "grid", gap: 6, padding: files.length > 1 ? 6 : 0, background: files.length > 1 ? "#14233a" : "transparent", borderRadius: 9 }}>
+                        {file.mime_type?.startsWith("image/") && file.signedUrl && <a href={file.signedUrl} target="_blank" rel="noreferrer"><img src={file.signedUrl} alt={file.file_name} style={{ width: "100%", maxHeight: 300, objectFit: "cover", borderRadius: 8 }} /></a>}
+                        {file.mime_type?.startsWith("video/") && file.signedUrl && <video src={file.signedUrl} controls style={{ width: "100%", maxHeight: 320 }} />}
+                        {file.mime_type?.startsWith("audio/") && file.signedUrl && <audio src={file.signedUrl} controls style={{ width: "100%" }} />}
+                        <a href={file.signedUrl} target="_blank" rel="noreferrer" style={{ color: "#c8d8ff", fontSize: 12, overflowWrap: "anywhere" }}>📎 {file.file_name}</a><small style={{ color: "#aebfda" }}>{(file.size_bytes / 1024 / 1024).toFixed(2)} MB</small>
+                      </div>)}
                     </div> : message.body}</div>}
                   <div style={{ display: "flex", gap: 9, flexWrap: "wrap", margin: "6px 4px 0", alignItems: "center" }}>
                     {["👍","❤️","😂"].map((emoji) => <button key={emoji} onClick={() => void toggleReaction(message, emoji)} style={{ ...secondaryButton, padding: "3px 7px", fontSize: 11, borderColor: message.reactions?.some((r) => r.emoji === emoji && r.user_id === user.id) ? "#86a8ff" : "#354663" }}>{emoji} {message.reactions?.filter((r) => r.emoji === emoji).length || ""}</button>)}
@@ -1207,7 +1227,7 @@ export function Workspace() {
             </div>
             {replyTo && <div style={{ padding: "9px 16px", background: "#14233a", borderTop: "1px solid #26334b", display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: 12, color: "#aebfda" }}>Replying to {replyTo.sender?.display_name || "member"}: {(replyTo.body || "Attachment").slice(0, 90)}</span><button onClick={() => setReplyTo(null)} style={{ ...secondaryButton, padding: "2px 8px" }}>×</button></div>}
             <form onSubmit={sendMessage} style={{ padding: 14, borderTop: "1px solid #26334b", display: "flex", gap: 9, alignItems: "center" }}>
-              <input ref={fileRef} type="file" onChange={uploadFile} disabled={uploading} style={{ display: "none" }} />
+              <input ref={fileRef} type="file" multiple onChange={uploadFile} disabled={uploading} style={{ display: "none" }} />
               <select aria-label="Message topic" value={topicId} onChange={(e) => setTopicId(e.target.value)} style={{ ...inputStyle, width: 130, padding: "9px 8px" }}><option value="">No topic</option>{topics.map((topic) => <option key={topic.id} value={topic.id}>{topic.name}</option>)}</select>
               <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading || recording} style={{ ...secondaryButton, fontSize: 19 }}>{uploading ? "…" : "＋"}</button>
               <button type="button" onClick={() => void toggleVoiceRecording()} disabled={uploading} style={{ ...secondaryButton, color: recording ? "#ff9eae" : "#cbd8ec" }}>{recording ? "Stop voice" : "Voice"}</button>
