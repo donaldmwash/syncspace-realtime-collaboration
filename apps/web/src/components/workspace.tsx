@@ -579,7 +579,7 @@ export function Workspace() {
     const sourceFile = original.attachments?.[0];
     let copiedPath = "";
     if (sourceFile) {
-      const safeName = sourceFile.file_name.replace(/[^\\w.\\-() ]/g, "_").slice(0, 120) || "forwarded-file";
+      const safeName = sourceFile.file_name.replace(/[^\w.\-() ]/g, "_").slice(0, 120) || "forwarded-file";
       copiedPath = targetId + "/" + user.id + "/" + crypto.randomUUID() + "-" + safeName;
       const { error: copyError } = await supabase.storage.from("conversation-files").copy(sourceFile.object_path, copiedPath);
       if (copyError) { setNotice(copyError.message); return; }
