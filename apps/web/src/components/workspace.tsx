@@ -28,6 +28,7 @@ export function Workspace() {
   const [editDraft, setEditDraft] = useState("");
   const [notice, setNotice] = useState("Choose a display name to join the conversation.");
   const socketRef = useRef<Socket | null>(null);
+  const authorIdRef = useRef("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -38,9 +39,18 @@ export function Workspace() {
   useEffect(() => {
     if (!joined || !name) return;
 
+    let authorId = window.localStorage.getItem("syncspace-author-id");
+    if (!authorId) {
+      authorId = typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `member-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      window.localStorage.setItem("syncspace-author-id", authorId);
+    }
+    authorIdRef.current = authorId;
+
     const socket = io(REALTIME_URL, {
       transports: ["websocket"],
-      auth: { roomId: ROOM_ID, displayName: name },
+      auth: { roomId: ROOM_ID, displayName: name, authorId },
       reconnection: true,
     });
     socketRef.current = socket;
@@ -190,7 +200,7 @@ export function Workspace() {
                   <p style={{ fontSize: 13, lineHeight: 1.6 }}>Send the first message and start the conversation.</p>
                 </div>
               ) : messages.map((message) => {
-                const mine = message.senderId === socketRef.current?.id;
+                const mine = message.senderId === authorIdRef.current;
                 const editing = editingId === message.id;
                 return (
                   <article key={message.id} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "min(78%, 600px)", minWidth: 120 }}>
