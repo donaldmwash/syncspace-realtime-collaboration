@@ -77,3 +77,4 @@ A Vercel preview was successfully deployed from this feature branch. The latest 
 - Private attachment paths include the conversation ID and uploader ID. Downloads use short-lived signed URLs.
 - Channel message inserts are restricted to conversation owners/admins at the database policy layer.
 - The app does not claim end-to-end encryption. Messages are protected by authenticated access and database/storage authorization, not E2EE.
+- The Supabase security advisor currently flags the placement of the non-relocatable `pg_net` extension in the `public` schema; this warning remains open for platform-level review.
