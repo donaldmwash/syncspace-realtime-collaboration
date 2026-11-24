@@ -58,6 +58,7 @@ export function Workspace() {
   const [notice, setNotice] = useState("Create an account or sign in to start messaging.");
   const [busy, setBusy] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [unreadCounts, setUnreadCounts] = useState<Record<string,number>>({});
   const [activeId, setActiveId] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
@@ -136,6 +137,13 @@ export function Workspace() {
 
   const activeConversation = conversations.find((item) => item.id === activeId) ?? null;
 
+  const refreshUnreadCounts = useCallback(async () => {
+    if (!supabase || !user) return;
+    const { data, error } = await supabase.rpc("get_unread_counts");
+    if (error) { setNotice(error.message); return; }
+    setUnreadCounts(Object.fromEntries((data ?? []).map((row: any) => [row.conversation_id, Number(row.unread_count)])));
+  }, [supabase, user]);
+
   const loadConversations = useCallback(async (currentUser: User) => {
     if (!supabase) return;
     const { data, error } = await supabase
@@ -163,7 +171,8 @@ export function Workspace() {
     });
     setConversations(list);
     setActiveId((current) => list.some((item) => item.id === current) ? current : (list[0]?.id ?? ""));
-  }, [supabase]);
+    void refreshUnreadCounts();
+  }, [supabase, refreshUnreadCounts]);
 
   const loadMessages = useCallback(async (conversationId: string) => {
     if (!supabase || !conversationId) return;
@@ -186,7 +195,8 @@ export function Workspace() {
     setMessages(hydrated);
     const unread = rows.filter((row) => row.sender_id !== user?.id).map((row) => ({ message_id: row.id, user_id: user?.id, read_at: new Date().toISOString() }));
     if (unread.length) await supabase.from("message_receipts").upsert(unread, { onConflict: "message_id,user_id" });
-  }, [supabase, user]);
+    void refreshUnreadCounts();
+  }, [supabase, user, refreshUnreadCounts]);
 
   useEffect(() => {
     if (!supabase) { setNotice("Supabase is not configured. Add the two public Supabase environment variables to the web app."); setAuthReady(true); return; }
@@ -1081,7 +1091,7 @@ export function Workspace() {
           <div style={{ display: "grid", gap: 7, overflowY: "auto" }}>
             {conversations.map((conversation) => (
               <button key={conversation.id} onClick={() => setActiveId(conversation.id)} style={{ textAlign: "left", padding: 12, borderRadius: 10, border: "1px solid " + (activeId === conversation.id ? "#6386d4" : "#26334b"), background: activeId === conversation.id ? "#1b2d4b" : "transparent", color: "#e7eefb", cursor: "pointer" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 7 }}><span>{conversation.type === "channel" ? "📢" : conversation.id === LOUNGE_ID ? "🌐" : "👥"}</span><strong style={{ fontSize: 13 }}>{conversation.title || "Direct message"}</strong></div>
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}><span>{conversation.type === "channel" ? "📢" : conversation.id === LOUNGE_ID ? "🌐" : "👥"}</span><strong style={{ fontSize: 13 }}>{conversation.title || "Direct message"}</strong>{!!unreadCounts[conversation.id] && <span style={{ marginLeft: "auto", minWidth: 20, padding: "2px 6px", borderRadius: 99, background: "#86a8ff", color: "#081020", fontSize: 10, fontWeight: 800, textAlign: "center" }}>{unreadCounts[conversation.id] > 99 ? "99+" : unreadCounts[conversation.id]}</span>}</div>
                 <div style={{ color: "#8193b1", fontSize: 11, marginTop: 5 }}>{conversation.id === LOUNGE_ID ? "Public community" : conversation.type === "channel" ? "Channel" : "Private group"} · {conversation.role}</div>
               </button>
             ))}
