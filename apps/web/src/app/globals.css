@@ -1,1 +1,2 @@
 :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#080d18;color:#e7edf8;font-family:Arial,Helvetica,sans-serif}button,input,textarea{font:inherit}button{cursor:pointer}.editor p{margin:.65rem 0;line-height:1.75}.editor:focus{outline:none}
+.syncspace-layout{width:100%}@media(max-width:760px){.syncspace-layout{grid-template-columns:minmax(0,1fr)!important}.syncspace-layout>aside{min-height:auto!important}.syncspace-layout>section{min-height:65vh!important}.syncspace-layout>aside>div:nth-of-type(3){max-height:220px;overflow:auto}}
