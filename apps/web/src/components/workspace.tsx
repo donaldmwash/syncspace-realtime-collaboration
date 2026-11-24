@@ -92,6 +92,8 @@ export function Workspace() {
   const [profileName, setProfileName] = useState("");
   const [profileUsername, setProfileUsername] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
+  const [currentDeviceId, setCurrentDeviceId] = useState("");
+  const [devices, setDevices] = useState<{id:string;device_name:string|null;platform:string|null;last_seen_at:string;created_at:string}[]>([]);
   const [showLastSeen, setShowLastSeen] = useState(true);
   const [showOnlineStatus, setShowOnlineStatus] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
@@ -235,6 +237,14 @@ export function Workspace() {
       setProfileName(profile?.display_name ?? cleanName);
       setProfileUsername(profile?.username ?? "");
       setAvatarUrl(profile?.avatar_url ?? "");
+      const deviceKey = "syncspace.device." + user.id;
+      let deviceId = window.localStorage.getItem(deviceKey);
+      if (!deviceId) { deviceId = crypto.randomUUID(); window.localStorage.setItem(deviceKey, deviceId); }
+      setCurrentDeviceId(deviceId);
+      const deviceName = (navigator.userAgent || "Browser").slice(0, 120);
+      const platform = (navigator.userAgentData?.platform || navigator.platform || "Web").slice(0, 80);
+      const { error: deviceError } = await supabase.from("user_devices").upsert({ id: deviceId, user_id: user.id, device_name: deviceName, platform, last_seen_at: new Date().toISOString() }, { onConflict: "id" });
+      if (deviceError) setNotice("Device registration: " + deviceError.message);
       setShowLastSeen(profile?.show_last_seen ?? true);
       setShowOnlineStatus(profile?.show_online_status ?? true);
       void supabase.from("profiles").update({ last_seen_at: new Date().toISOString() }).eq("id", user.id);
@@ -461,6 +471,30 @@ export function Workspace() {
     setBusy(false);
   }
 
+  async function exportConversationHistory() {
+    if (!supabase || !activeConversation || !user) return;
+    setBusy(true);
+    const exported: any[] = [];
+    const pageSize = 500;
+    for (let from = 0; from < 10000; from += pageSize) {
+      const { data, error } = await supabase.from("messages")
+        .select("id,sender_id,body,message_type,reply_to_id,forwarded_from_id,topic_id,created_at,edited_at,deleted_at,attachments(file_name,mime_type,size_bytes,object_path)")
+        .eq("conversation_id", activeConversation.id).order("created_at", { ascending: true }).range(from, from + pageSize - 1);
+      if (error) { setNotice(error.message); setBusy(false); return; }
+      exported.push(...(data ?? []));
+      if (!data || data.length < pageSize) break;
+    }
+    const payload = { format: "syncspace-conversation-export-v1", exported_at: new Date().toISOString(), conversation: { id: activeConversation.id, title: activeConversation.title, type: activeConversation.type }, message_count: exported.length, attachment_note: "Attachment metadata and private object paths are included; file bytes are not embedded.", messages: exported };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "syncspace-" + (activeConversation.title || "conversation").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + "-export.json";
+    document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
+    setBusy(false);
+    setNotice("Exported " + exported.length + " messages. Attachment file contents are not included.");
+  }
+
   async function openChannelAnalytics() {
     if (!supabase || !activeConversation || activeConversation.type !== "channel" || !["owner","admin"].includes(activeConversation.role ?? "")) return;
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -659,6 +693,9 @@ export function Workspace() {
     const ids = (blocks ?? []).map((item: any) => item.blocked_id);
     const { data: profiles } = ids.length ? await supabase.from("profiles").select("id,display_name,username").in("id", ids) : { data: [] };
     setBlockedUsers((profiles ?? []).map((item: any) => ({ id: item.id, display_name: item.display_name, username: item.username })));
+    const { data: deviceRows, error: deviceError } = await supabase.from("user_devices").select("id,device_name,platform,last_seen_at,created_at").eq("user_id", user.id).order("last_seen_at", { ascending: false });
+    if (deviceError) setNotice(deviceError.message);
+    setDevices((deviceRows ?? []) as {id:string;device_name:string|null;platform:string|null;last_seen_at:string;created_at:string}[]);
     setShowProfile(true);
   }
 
@@ -667,6 +704,15 @@ export function Workspace() {
     const { error } = await supabase.from("user_blocks").delete().eq("blocker_id", user.id).eq("blocked_id", blockedId);
     if (error) setNotice(error.message);
     else { setBlockedUsers((current) => current.filter((item) => item.id !== blockedId)); setNotice("Account unblocked."); }
+  }
+
+  async function signOutOtherSessions() {
+    if (!supabase || !user || !window.confirm("Sign out every other SyncSpace session? Other devices may remain active until their current access token expires.")) return;
+    const { error } = await supabase.auth.signOut({ scope: "others" });
+    if (error) { setNotice(error.message); return; }
+    if (currentDeviceId) await supabase.from("user_devices").delete().eq("user_id", user.id).neq("id", currentDeviceId);
+    await openProfile();
+    setNotice("Other refresh sessions have been revoked. Existing access tokens can remain valid until they expire.");
   }
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
@@ -1126,7 +1172,7 @@ export function Workspace() {
           {activeConversation ? <>
             <header style={{ padding: "17px 20px", borderBottom: "1px solid #26334b", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div><strong style={{ fontSize: 17 }}>{activeConversation.title || "Conversation"}</strong><div style={{ color: "#8193b1", fontSize: 12, marginTop: 4 }}>{activeConversation.is_private ? "Private conversation" : "Public community"} · {onlineCount} online{activeConversation.is_announcement_only ? " · Announcements" : ""}{activeConversation.message_ttl_seconds ? " · Disappearing " + (activeConversation.message_ttl_seconds / 3600 >= 24 ? (activeConversation.message_ttl_seconds / 86400) + "d" : (activeConversation.message_ttl_seconds / 3600) + "h") : ""}</div></div>
-              <div style={{ display: "flex", gap: 8 }}><button onClick={() => setShowSchedule(true)} style={secondaryButton}>Scheduled</button>{["owner","admin"].includes(activeConversation.role ?? "") && <button onClick={() => { setTtlSeconds(String(activeConversation.message_ttl_seconds ?? 0)); setShowConversationSettings(true); }} style={secondaryButton}>Privacy</button>}{activeConversation.type === "channel" && ["owner","admin"].includes(activeConversation.role ?? "") && <button onClick={() => void openChannelAnalytics()} style={secondaryButton}>Analytics</button>}<button onClick={() => void openSharedMedia()} style={secondaryButton}>Media</button><button onClick={() => void openPinnedMessages()} style={secondaryButton}>Pinned</button><button onClick={() => setShowTopics(true)} style={secondaryButton}>Topics</button><button onClick={() => setShowMembers(true)} style={secondaryButton}>Members / invite</button></div>
+              <div style={{ display: "flex", gap: 8 }}><button onClick={() => void exportConversationHistory()} disabled={busy} style={secondaryButton}>Export</button><button onClick={() => setShowSchedule(true)} style={secondaryButton}>Scheduled</button>{["owner","admin"].includes(activeConversation.role ?? "") && <button onClick={() => { setTtlSeconds(String(activeConversation.message_ttl_seconds ?? 0)); setShowConversationSettings(true); }} style={secondaryButton}>Privacy</button>}{activeConversation.type === "channel" && ["owner","admin"].includes(activeConversation.role ?? "") && <button onClick={() => void openChannelAnalytics()} style={secondaryButton}>Analytics</button>}<button onClick={() => void openSharedMedia()} style={secondaryButton}>Media</button><button onClick={() => void openPinnedMessages()} style={secondaryButton}>Pinned</button><button onClick={() => setShowTopics(true)} style={secondaryButton}>Topics</button><button onClick={() => setShowMembers(true)} style={secondaryButton}>Members / invite</button></div>
             </header>
             <div aria-live="polite" style={{ flex: 1, minHeight: 400, maxHeight: "calc(100vh - 230px)", overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
               {visibleMessages.map((message) => {
@@ -1194,7 +1240,7 @@ export function Workspace() {
 
       {showMembers && activeConversation && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 480px)", padding: 22 }}><h2 style={{ marginTop: 0 }}>Members and invitations</h2><p style={{ color: "#8193b1", fontSize: 13 }}>Manage members and invite people by username. People must set a username in their profile to be found.</p><div style={{ display: "grid", gap: 7, maxHeight: 180, overflowY: "auto" }}><strong style={{ fontSize: 12 }}>Current members · {conversationMembers.length}</strong>{conversationMembers.map((member) => <div key={member.user_id} style={{ display: "flex", gap: 8, alignItems: "center", padding: 7, borderRadius: 8, background: "#14233a" }}><img src={member.avatar_url || "https://www.gravatar.com/avatar/?d=mp"} alt="" style={{ width: 30, height: 30, borderRadius: "50%", objectFit: "cover" }} /><span style={{ flex: 1, minWidth: 0, fontSize: 12 }}>{member.display_name}<small style={{ display: "block", color: "#8193b1" }}>{member.username ? "@"+member.username : member.role}</small></span>{member.role === "owner" ? <small>Owner</small> : member.user_id === user.id ? <small>You · {member.role}</small> : ["owner","admin"].includes(activeConversation.role ?? "") ? <><select aria-label={"Role for "+member.display_name} value={member.role} onChange={(e) => void changeMemberRole(member.user_id,e.target.value)} style={{ ...inputStyle, width: 105, padding: "6px 5px", fontSize: 11 }}><option value="member">Member</option><option value="moderator">Moderator</option>{activeConversation.role === "owner" && <option value="admin">Admin</option>}</select><button onClick={() => void removeConversationMember(member.user_id)} style={{ ...secondaryButton, padding: "5px 7px" }}>Remove</button></> : <small>{member.role}</small>}</div>)}</div>{activeConversation.role !== "owner" && <button onClick={() => void leaveConversation()} style={{ ...secondaryButton, color: "#ff9eae" }}>Leave conversation</button>}{activeConversation.type !== "direct" && ["owner","admin"].includes(activeConversation.role ?? "") && <div style={{ display: "grid", gap: 8 }}><button type="button" onClick={() => void createInviteLink()} style={primaryButton}>Create 7-day invite link</button>{inviteLink && <input readOnly value={inviteLink} onFocus={(e) => e.currentTarget.select()} style={inputStyle} />}</div>}<div style={{ display: "grid", gap: 6 }}><strong style={{ fontSize: 12 }}>Existing invites</strong>{inviteRecords.map((invite) => <div key={invite.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 11, color: "#aebfda" }}><span>{invite.revoked_at ? "Revoked" : invite.expires_at && new Date(invite.expires_at) < new Date() ? "Expired" : "Active"} · {invite.uses_count}/{invite.max_uses ?? "∞"} joins</span>{!invite.revoked_at && ["owner","admin"].includes(activeConversation.role ?? "") && <button onClick={() => void revokeInvite(invite.id)} style={secondaryButton}>Revoke</button>}</div>)}</div>{activeConversation.type !== "direct" && <form onSubmit={findMembers} style={{ display: "flex", gap: 8 }}><input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="@username" style={inputStyle} /><button style={primaryButton}>Find</button></form>}<div style={{ display: "grid", gap: 8, marginTop: 14 }}>{activeConversation.type !== "direct" && memberResults.map((member) => <div key={member.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 10, background: "#14233a", borderRadius: 8 }}><span>{member.display_name} <small style={{ color: "#8193b1" }}>@{member.username}</small></span><div style={{ display: "flex", gap: 6 }}><button onClick={() => void addMember(member.id)} style={secondaryButton}>Add</button><button onClick={() => void startDirect(member)} style={secondaryButton}>Message</button><button onClick={() => void reportMember(member.id)} style={secondaryButton}>Report</button><button onClick={() => void blockMember(member.id)} style={secondaryButton}>Block</button></div></div>)}</div><button onClick={() => setShowMembers(false)} style={{ ...secondaryButton, width: "100%", marginTop: 14 }}>Close</button></section></div>}
 
-      {showProfile && <div style={modalStyle}><form onSubmit={saveProfile} style={{ ...panel, width: "min(100%, 440px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Your profile</h2>{avatarUrl && <img src={avatarUrl} alt="Your profile" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: "50%" }} />}<label style={{ color: "#cbd8ec", fontSize: 13 }}>Profile picture<input type="file" accept="image/*" onChange={uploadAvatar} style={{ display: "block", marginTop: 7, color: "#aebfda" }} /></label><label style={{ color: "#cbd8ec", fontSize: 13 }}>Display name<input value={profileName} onChange={(e) => setProfileName(e.target.value)} maxLength={60} required style={{ ...inputStyle, marginTop: 6 }} /></label><label style={{ color: "#cbd8ec", fontSize: 13 }}>Username<input value={profileUsername} onChange={(e) => setProfileUsername(e.target.value)} maxLength={24} placeholder="your_username" style={{ ...inputStyle, marginTop: 6 }} /></label><small style={{ color: "#8193b1" }}>Username must be unique and 3–24 letters, numbers or underscores. Email: {user.email}</small><div style={{ display: "grid", gap: 9, padding: 12, borderRadius: 9, background: "#14233a" }}><strong style={{ fontSize: 12 }}>Privacy</strong><label style={{ display: "flex", gap: 8, alignItems: "center", color: "#cbd8ec", fontSize: 13 }}><input type="checkbox" checked={showOnlineStatus} onChange={(e) => setShowOnlineStatus(e.target.checked)} /> Share my online presence</label><label style={{ display: "flex", gap: 8, alignItems: "center", color: "#cbd8ec", fontSize: 13 }}><input type="checkbox" checked={showLastSeen} onChange={(e) => setShowLastSeen(e.target.checked)} /> Share my last-seen time</label></div><div style={{ display: "grid", gap: 7 }}><strong style={{ fontSize: 12 }}>Blocked accounts</strong>{blockedUsers.map((blocked) => <div key={blocked.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12 }}><span>{blocked.display_name} {blocked.username ? "@"+blocked.username : ""}</span><button type="button" onClick={() => void unblockUser(blocked.id)} style={secondaryButton}>Unblock</button></div>)}{!blockedUsers.length && <small style={{ color: "#8193b1" }}>No blocked accounts.</small>}</div><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowProfile(false)} style={secondaryButton}>Cancel</button><button style={primaryButton}>Save profile</button></div></form></div>}
+      {showProfile && <div style={modalStyle}><form onSubmit={saveProfile} style={{ ...panel, width: "min(100%, 440px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Your profile</h2>{avatarUrl && <img src={avatarUrl} alt="Your profile" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: "50%" }} />}<label style={{ color: "#cbd8ec", fontSize: 13 }}>Profile picture<input type="file" accept="image/*" onChange={uploadAvatar} style={{ display: "block", marginTop: 7, color: "#aebfda" }} /></label><label style={{ color: "#cbd8ec", fontSize: 13 }}>Display name<input value={profileName} onChange={(e) => setProfileName(e.target.value)} maxLength={60} required style={{ ...inputStyle, marginTop: 6 }} /></label><label style={{ color: "#cbd8ec", fontSize: 13 }}>Username<input value={profileUsername} onChange={(e) => setProfileUsername(e.target.value)} maxLength={24} placeholder="your_username" style={{ ...inputStyle, marginTop: 6 }} /></label><small style={{ color: "#8193b1" }}>Username must be unique and 3–24 letters, numbers or underscores. Email: {user.email}</small><div style={{ display: "grid", gap: 8, padding: 12, borderRadius: 9, background: "#14233a" }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}><strong style={{ fontSize: 12 }}>Signed-in devices</strong><button type="button" onClick={() => void signOutOtherSessions()} style={{ ...secondaryButton, color: "#ffb2be" }}>Sign out other sessions</button></div>{devices.map((device) => <div key={device.id} style={{ fontSize: 11, color: "#cbd8ec" }}><strong>{device.id === currentDeviceId ? "This device" : "Other device"}</strong> · {(device.platform || "Web").slice(0, 40)}<small style={{ display: "block", color: "#8193b1", overflowWrap: "anywhere" }}>{(device.device_name || "Browser").slice(0, 100)} · Seen {new Date(device.last_seen_at).toLocaleString()}</small></div>)}{!devices.length && <small style={{ color: "#8193b1" }}>No device records yet.</small>}</div><div style={{ display: "grid", gap: 9, padding: 12, borderRadius: 9, background: "#14233a" }}><strong style={{ fontSize: 12 }}>Privacy</strong><label style={{ display: "flex", gap: 8, alignItems: "center", color: "#cbd8ec", fontSize: 13 }}><input type="checkbox" checked={showOnlineStatus} onChange={(e) => setShowOnlineStatus(e.target.checked)} /> Share my online presence</label><label style={{ display: "flex", gap: 8, alignItems: "center", color: "#cbd8ec", fontSize: 13 }}><input type="checkbox" checked={showLastSeen} onChange={(e) => setShowLastSeen(e.target.checked)} /> Share my last-seen time</label></div><div style={{ display: "grid", gap: 7 }}><strong style={{ fontSize: 12 }}>Blocked accounts</strong>{blockedUsers.map((blocked) => <div key={blocked.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12 }}><span>{blocked.display_name} {blocked.username ? "@"+blocked.username : ""}</span><button type="button" onClick={() => void unblockUser(blocked.id)} style={secondaryButton}>Unblock</button></div>)}{!blockedUsers.length && <small style={{ color: "#8193b1" }}>No blocked accounts.</small>}</div><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowProfile(false)} style={secondaryButton}>Cancel</button><button style={primaryButton}>Save profile</button></div></form></div>}
     </main>
   );
 }
