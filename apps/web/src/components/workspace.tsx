@@ -15,6 +15,7 @@ type Conversation = {
   role?: string;
 };
 type Attachment = { id: string; file_name: string; mime_type: string | null; size_bytes: number; object_path: string; signedUrl?: string };
+type Poll = { id: string; question: string; allows_multiple: boolean; closes_at: string | null; poll_options: { id: string; label: string; position: number }[]; poll_votes: { option_id: string; user_id: string }[] };
 type Message = {
   id: string;
   conversation_id: string;
@@ -29,7 +30,7 @@ type Message = {
   attachments?: Attachment[];
   reactions?: { emoji: string; user_id: string }[];
   receipts?: { user_id: string; read_at: string | null }[];
-  polls?: { id: string; question: string; allows_multiple: boolean; closes_at: string | null; poll_options: { id: string; label: string; position: number }[]; poll_votes: { option_id: string; user_id: string }[] } | { id: string; question: string; allows_multiple: boolean; closes_at: string | null; poll_options: { id: string; label: string; position: number }[]; poll_votes: { option_id: string; user_id: string }[] }[];
+  polls?: Poll | Poll[];
   reply?: { body: string | null; sender?: { display_name: string } } | null;
 };
 
@@ -386,7 +387,7 @@ export function Workspace() {
     setBusy(false);
   }
 
-  async function votePoll(poll: NonNullable<Message["polls"]> extends (infer T)[] ? T : NonNullable<Message["polls"]>, optionId: string) {
+  async function votePoll(poll: Poll, optionId: string) {
     if (!supabase || !user) return;
     if (poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now()) { setNotice("This poll is closed."); return; }
     const existing = poll.poll_votes.filter((vote) => vote.user_id === user.id);
@@ -508,7 +509,7 @@ export function Workspace() {
                   <div style={{ color: mine ? "#9db8ff" : "#8ce0b0", fontSize: 11, margin: "0 5px 5px" }}>{mine ? "You" : message.sender?.display_name || "Member"} · {new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{message.edited_at ? " · Edited" : ""}{mine && message.receipts?.some((receipt) => receipt.read_at) ? " · ✓✓ Read" : ""}</div>
                   {reply && <div style={{ padding: "7px 10px", borderLeft: "3px solid #86a8ff", background: "#111f34", borderRadius: 7, color: "#aebfda", fontSize: 11, marginBottom: 4 }}>Replying to {reply.sender?.display_name || "member"}: {(reply.body || "Attachment").slice(0, 120)}</div>}
                   {editingId === message.id ? <div style={{ ...panel, padding: 9 }}><textarea value={editDraft} onChange={(e) => setEditDraft(e.target.value)} style={{ ...inputStyle, minHeight: 80 }} /><div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}><button onClick={() => setEditingId("")} style={secondaryButton}>Cancel</button><button onClick={() => void editMessage(message.id)} style={primaryButton}>Save</button></div></div> : <div style={{ background: mine ? "#20365c" : "#1a2940", borderRadius: 13, padding: "11px 14px", lineHeight: 1.6, overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>
-                    {poll ? <div style={{ display: "grid", gap: 9, minWidth: 230 }}><strong>{poll.question}</strong>{poll.poll_options.sort((a,b) => a.position-b.position).map((option) => { const count = poll.poll_votes.filter((vote) => vote.option_id === option.id).length; const selected = poll.poll_votes.some((vote) => vote.option_id === option.id && vote.user_id === user.id); const total = poll.poll_votes.length; return <button key={option.id} onClick={() => void votePoll(poll, option.id)} disabled={!!poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now()} style={{ textAlign: "left", padding: 9, borderRadius: 8, border: "1px solid " + (selected ? "#86a8ff" : "#40516c"), background: selected ? "#263f68" : "#15243a", color: "#e7eefb" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>{selected ? "✓ " : ""}{option.label}</span><small>{count}</small></div><div style={{ height: 4, background: "#34445d", borderRadius: 5, marginTop: 7 }}><div style={{ width: (total ? Math.round(count / total * 100) : 0) + "%", height: "100%", background: "#86a8ff", borderRadius: 5 }} /></div></button>; })}<small style={{ color: "#aebfda" }}>{poll.poll_votes.length} vote(s) · {poll.allows_multiple ? "Multiple answers" : "Choose one"}{poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now() ? " · Closed" : ""}</small></div> : file ? <div style={{ display: "grid", gap: 7 }}>
+                    {poll ? <div style={{ display: "grid", gap: 9, minWidth: 230 }}><strong>{poll.question}</strong>{[...poll.poll_options].sort((a,b) => a.position-b.position).map((option) => { const count = poll.poll_votes.filter((vote) => vote.option_id === option.id).length; const selected = poll.poll_votes.some((vote) => vote.option_id === option.id && vote.user_id === user.id); const total = poll.poll_votes.length; return <button key={option.id} onClick={() => void votePoll(poll, option.id)} disabled={!!poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now()} style={{ textAlign: "left", padding: 9, borderRadius: 8, border: "1px solid " + (selected ? "#86a8ff" : "#40516c"), background: selected ? "#263f68" : "#15243a", color: "#e7eefb" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>{selected ? "✓ " : ""}{option.label}</span><small>{count}</small></div><div style={{ height: 4, background: "#34445d", borderRadius: 5, marginTop: 7 }}><div style={{ width: (total ? Math.round(count / total * 100) : 0) + "%", height: "100%", background: "#86a8ff", borderRadius: 5 }} /></div></button>; })}<small style={{ color: "#aebfda" }}>{poll.poll_votes.length} vote(s) · {poll.allows_multiple ? "Multiple answers" : "Choose one"}{poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now() ? " · Closed" : ""}</small></div> : file ? <div style={{ display: "grid", gap: 7 }}>
                       {file.mime_type?.startsWith("image/") && file.signedUrl && <a href={file.signedUrl} target="_blank" rel="noreferrer"><img src={file.signedUrl} alt={file.file_name} style={{ maxWidth: "100%", maxHeight: 300, borderRadius: 8 }} /></a>}
                       {file.mime_type?.startsWith("video/") && file.signedUrl && <video src={file.signedUrl} controls style={{ maxWidth: "100%", maxHeight: 320 }} />}
                       {file.mime_type?.startsWith("audio/") && file.signedUrl && <audio src={file.signedUrl} controls />}
@@ -530,7 +531,7 @@ export function Workspace() {
             <form onSubmit={sendMessage} style={{ padding: 14, borderTop: "1px solid #26334b", display: "flex", gap: 9, alignItems: "center" }}>
               <input ref={fileRef} type="file" onChange={uploadFile} disabled={uploading} style={{ display: "none" }} />
               <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading} style={{ ...secondaryButton, fontSize: 19 }}>{uploading ? "…" : "＋"}</button>
-              <button type="button" onClick={() => setShowPoll(true)} style={secondaryButton}>Poll</button>
+              {(!activeConversation.is_announcement_only || ["owner","admin"].includes(activeConversation.role ?? "")) && <button type="button" onClick={() => setShowPoll(true)} style={secondaryButton}>Poll</button>}
               <input value={draft} onChange={(e) => notifyTyping(e.target.value)} placeholder={activeConversation.is_announcement_only && activeConversation.role === "member" ? "Only admins can post here" : "Write a message…"} disabled={activeConversation.is_announcement_only && !["owner","admin"].includes(activeConversation.role ?? "")} style={{ ...inputStyle, flex: 1 }} />
               <button type="submit" disabled={!draft.trim() || (activeConversation.is_announcement_only && !["owner","admin"].includes(activeConversation.role ?? ""))} style={primaryButton}>Send</button>
             </form>
