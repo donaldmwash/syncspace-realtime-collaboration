@@ -51,7 +51,8 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [x] Browser voice-note recording and playback.
 - [x] One-time location sharing.
 - [x] Multi-file image/video/file albums with grouped message delivery and forwarding.
-- [ ] Contact cards, live location sharing and link previews.
+- [x] Shareable structured contact cards for current conversation members.
+- [ ] Live location sharing and link previews.
 - [x] Personal conversation folders.
 - [x] Draft synchronization across sessions.
 - [x] Shared-media browser.
