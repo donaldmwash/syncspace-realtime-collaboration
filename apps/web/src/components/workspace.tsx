@@ -65,6 +65,9 @@ export function Workspace() {
   const [newType, setNewType] = useState<"group" | "channel">("group");
   const [memberQuery, setMemberQuery] = useState("");
   const [memberResults, setMemberResults] = useState<any[]>([]);
+  const [inviteRecords, setInviteRecords] = useState<{id:string;expires_at:string|null;max_uses:number|null;uses_count:number;revoked_at:string|null}[]>([]);
+  const [inviteLink, setInviteLink] = useState("");
+  const [pendingInvite, setPendingInvite] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
   const [onlineCount, setOnlineCount] = useState(0);
@@ -150,6 +153,10 @@ export function Workspace() {
       setUser(data.session?.user ?? null);
       setAuthReady(true);
     });
+    const queryToken = new URLSearchParams(window.location.search).get("invite");
+    const storedToken = window.localStorage.getItem("syncspace.pendingInvite");
+    const inviteToken = queryToken || storedToken || "";
+    if (inviteToken) { window.localStorage.setItem("syncspace.pendingInvite", inviteToken); setPendingInvite(inviteToken); }
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
       if (event === "PASSWORD_RECOVERY") setShowPasswordRecovery(true);
@@ -246,6 +253,30 @@ export function Workspace() {
     setStatuses(hydrated);
   }
 
+
+  useEffect(() => {
+    if (!user || !supabase || !pendingInvite) return;
+    void (async () => {
+      const { data, error } = await supabase.rpc("redeem_conversation_invite", { p_token: pendingInvite });
+      window.localStorage.removeItem("syncspace.pendingInvite");
+      const url = new URL(window.location.href);
+      url.searchParams.delete("invite");
+      window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+      setPendingInvite("");
+      if (error) { setNotice(error.message); return; }
+      await loadConversations(user);
+      setActiveId(String(data));
+      setNotice("You joined the invited conversation.");
+    })();
+  }, [user, supabase, pendingInvite, loadConversations]);
+
+  useEffect(() => {
+    if (!supabase || !activeId) { setInviteRecords([]); return; }
+    void supabase.from("conversation_invites").select("id,expires_at,max_uses,uses_count,revoked_at")
+      .eq("conversation_id", activeId).order("created_at", { ascending: false })
+      .then(({ data, error }) => { if (error) setNotice(error.message); else setInviteRecords((data ?? []) as any[]); });
+  }, [activeId, supabase]);
+
   async function authenticate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!supabase) return;
@@ -254,7 +285,7 @@ export function Workspace() {
       if (authMode === "signup") {
         const clean = displayName.trim().replace(/\s+/g, " ").slice(0, 60);
         if (!clean) throw new Error("Enter the name other members will see.");
-        const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { display_name: clean }, emailRedirectTo: window.location.origin } });
+        const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { display_name: clean }, emailRedirectTo: window.location.href } });
         if (error) throw error;
         if (!data.session) setNotice("Account created. Check your email to confirm your address, then sign in.");
         else setNotice("Your account is ready. Welcome to SyncSpace.");
@@ -333,6 +364,32 @@ export function Workspace() {
   }
 
 
+
+
+  async function createInviteLink() {
+    if (!supabase || !user || !activeConversation || activeConversation.type === "direct") return;
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    const token = Array.from(bytes).map((value) => value.toString(16).padStart(2, "0")).join("");
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+    const tokenHash = Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, "0")).join("");
+    const { data, error } = await supabase.from("conversation_invites").insert({
+      conversation_id: activeConversation.id, token_hash: tokenHash, created_by: user.id,
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), max_uses: 50,
+    }).select("id,expires_at,max_uses,uses_count,revoked_at").single();
+    if (error) { setNotice(error.message); return; }
+    const link = window.location.origin + "/?invite=" + token;
+    setInviteLink(link);
+    setInviteRecords((current) => [data, ...current]);
+    try { await navigator.clipboard.writeText(link); setNotice("Invite link copied. It expires in 7 days or after 50 new joins."); }
+    catch { setNotice("Invite link created. Copy it from the field below."); }
+  }
+
+  async function revokeInvite(inviteId: string) {
+    if (!supabase) return;
+    const { error } = await supabase.from("conversation_invites").update({ revoked_at: new Date().toISOString() }).eq("id", inviteId);
+    if (error) setNotice(error.message);
+    else { setInviteRecords((current) => current.map((item) => item.id === inviteId ? { ...item, revoked_at: new Date().toISOString() } : item)); setNotice("Invite revoked."); }
+  }
 
   async function blockMember(memberId: string) {
     if (!supabase || !user) return;
@@ -695,7 +752,7 @@ export function Workspace() {
       {showPoll && <div style={modalStyle}><form onSubmit={createPoll} style={{ ...panel, width: "min(100%, 480px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Create a poll</h2><input value={pollQuestion} onChange={(e) => setPollQuestion(e.target.value)} maxLength={500} required placeholder="Ask a question" style={inputStyle} /><textarea value={pollOptions} onChange={(e) => setPollOptions(e.target.value)} rows={5} placeholder={"One answer per line\nOption 2"} style={{ ...inputStyle, resize: "vertical" }} /><label style={{ display: "flex", gap: 8, alignItems: "center", color: "#cbd8ec", fontSize: 13 }}><input type="checkbox" checked={pollMultiple} onChange={(e) => setPollMultiple(e.target.checked)} /> Allow multiple answers</label><small style={{ color: "#8193b1" }}>Add 2–10 options, one per line. Votes are visible to conversation members.</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowPoll(false)} style={secondaryButton}>Cancel</button><button disabled={busy} style={primaryButton}>Share poll</button></div></form></div>}
       {showCreate && <div style={modalStyle}><form onSubmit={createConversation} style={{ ...panel, width: "min(100%, 440px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Create a conversation</h2><div style={{ display: "flex", gap: 8 }}><button type="button" onClick={() => setNewType("group")} style={{ ...secondaryButton, flex: 1, background: newType === "group" ? "#20365c" : "transparent" }}>Group</button><button type="button" onClick={() => setNewType("channel")} style={{ ...secondaryButton, flex: 1, background: newType === "channel" ? "#20365c" : "transparent" }}>Channel</button></div><input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder={newType === "group" ? "Group name" : "Channel name"} maxLength={100} required style={inputStyle} /><p style={{ color: "#8193b1", fontSize: 12 }}>{newType === "channel" ? "Channels are announcement-first spaces. Only owners and admins can post." : "Groups are private. Add people by their SyncSpace username after creation."}</p><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowCreate(false)} style={secondaryButton}>Cancel</button><button disabled={busy} style={primaryButton}>Create</button></div></form></div>}
 
-      {showMembers && activeConversation && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 480px)", padding: 22 }}><h2 style={{ marginTop: 0 }}>Add members</h2><p style={{ color: "#8193b1", fontSize: 13 }}>Search by exact or partial username. People must set a username in their profile to be found.</p><form onSubmit={findMembers} style={{ display: "flex", gap: 8 }}><input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="@username" style={inputStyle} /><button style={primaryButton}>Find</button></form><div style={{ display: "grid", gap: 8, marginTop: 14 }}>{memberResults.map((member) => <div key={member.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 10, background: "#14233a", borderRadius: 8 }}><span>{member.display_name} <small style={{ color: "#8193b1" }}>@{member.username}</small></span><div style={{ display: "flex", gap: 6 }}><button onClick={() => void addMember(member.id)} style={secondaryButton}>Add</button><button onClick={() => void startDirect(member)} style={secondaryButton}>Message</button><button onClick={() => void reportMember(member.id)} style={secondaryButton}>Report</button><button onClick={() => void blockMember(member.id)} style={secondaryButton}>Block</button></div></div>)}</div><button onClick={() => setShowMembers(false)} style={{ ...secondaryButton, width: "100%", marginTop: 14 }}>Close</button></section></div>}
+      {showMembers && activeConversation && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 480px)", padding: 22 }}><h2 style={{ marginTop: 0 }}>Members and invitations</h2><p style={{ color: "#8193b1", fontSize: 13 }}>Search by exact or partial username. People must set a username in their profile to be found.</p>{activeConversation.type !== "direct" && ["owner","admin"].includes(activeConversation.role ?? "") && <div style={{ display: "grid", gap: 8 }}><button type="button" onClick={() => void createInviteLink()} style={primaryButton}>Create 7-day invite link</button>{inviteLink && <input readOnly value={inviteLink} onFocus={(e) => e.currentTarget.select()} style={inputStyle} />}</div>}<div style={{ display: "grid", gap: 6 }}><strong style={{ fontSize: 12 }}>Existing invites</strong>{inviteRecords.map((invite) => <div key={invite.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 11, color: "#aebfda" }}><span>{invite.revoked_at ? "Revoked" : invite.expires_at && new Date(invite.expires_at) < new Date() ? "Expired" : "Active"} · {invite.uses_count}/{invite.max_uses ?? "∞"} joins</span>{!invite.revoked_at && <button onClick={() => void revokeInvite(invite.id)} style={secondaryButton}>Revoke</button>}</div>)}</div><form onSubmit={findMembers} style={{ display: "flex", gap: 8 }}><input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="@username" style={inputStyle} /><button style={primaryButton}>Find</button></form><div style={{ display: "grid", gap: 8, marginTop: 14 }}>{memberResults.map((member) => <div key={member.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 10, background: "#14233a", borderRadius: 8 }}><span>{member.display_name} <small style={{ color: "#8193b1" }}>@{member.username}</small></span><div style={{ display: "flex", gap: 6 }}><button onClick={() => void addMember(member.id)} style={secondaryButton}>Add</button><button onClick={() => void startDirect(member)} style={secondaryButton}>Message</button><button onClick={() => void reportMember(member.id)} style={secondaryButton}>Report</button><button onClick={() => void blockMember(member.id)} style={secondaryButton}>Block</button></div></div>)}</div><button onClick={() => setShowMembers(false)} style={{ ...secondaryButton, width: "100%", marginTop: 14 }}>Close</button></section></div>}
 
       {showProfile && <div style={modalStyle}><form onSubmit={saveProfile} style={{ ...panel, width: "min(100%, 440px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Your profile</h2>{avatarUrl && <img src={avatarUrl} alt="Your profile" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: "50%" }} />}<label style={{ color: "#cbd8ec", fontSize: 13 }}>Profile picture<input type="file" accept="image/*" onChange={uploadAvatar} style={{ display: "block", marginTop: 7, color: "#aebfda" }} /></label><label style={{ color: "#cbd8ec", fontSize: 13 }}>Display name<input value={profileName} onChange={(e) => setProfileName(e.target.value)} maxLength={60} required style={{ ...inputStyle, marginTop: 6 }} /></label><label style={{ color: "#cbd8ec", fontSize: 13 }}>Username<input value={profileUsername} onChange={(e) => setProfileUsername(e.target.value)} maxLength={24} placeholder="your_username" style={{ ...inputStyle, marginTop: 6 }} /></label><small style={{ color: "#8193b1" }}>Username must be unique and 3–24 letters, numbers or underscores. Email: {user.email}</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowProfile(false)} style={secondaryButton}>Cancel</button><button style={primaryButton}>Save profile</button></div></form></div>}
     </main>
