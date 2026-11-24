@@ -74,6 +74,7 @@ export function Workspace() {
   const [onlineCount, setOnlineCount] = useState(0);
   const [typingName, setTypingName] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [recording, setRecording] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileUsername, setProfileUsername] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
@@ -103,6 +104,9 @@ export function Workspace() {
   const [showPasswordRecovery, setShowPasswordRecovery] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recorderStreamRef = useRef<MediaStream | null>(null);
+  const recorderChunksRef = useRef<BlobPart[]>([]);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const channelRef = useRef<any>(null);
   const supabase = useMemo(() => {
@@ -702,6 +706,62 @@ export function Workspace() {
     await loadMessages(activeId);
   }
 
+
+  async function toggleVoiceRecording() {
+    if (!supabase || !user || !activeConversation) return;
+    if (recording) {
+      recorderRef.current?.stop();
+      setRecording(false);
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setNotice("Voice recording is not supported in this browser.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recorderStreamRef.current = stream;
+      recorderChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (event) => { if (event.data.size) recorderChunksRef.current.push(event.data); };
+      recorder.onerror = () => { setNotice("The voice recording failed."); setRecording(false); stream.getTracks().forEach((track) => track.stop()); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+        recorderStreamRef.current = null;
+        const blob = new Blob(recorderChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        recorderChunksRef.current = [];
+        if (!blob.size) { setNotice("No audio was recorded."); return; }
+        if (blob.size > 50 * 1024 * 1024) { setNotice("This recording is larger than the 50 MB limit."); return; }
+        const extension = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm";
+        const fileName = "voice-message-" + Date.now() + "." + extension;
+        const path = activeConversation.id + "/" + user.id + "/" + crypto.randomUUID() + "-" + fileName;
+        setUploading(true);
+        const { error: uploadError } = await supabase.storage.from("conversation-files").upload(path, blob, { contentType: blob.type || "audio/webm", upsert: false });
+        if (uploadError) { setNotice(uploadError.message); setUploading(false); return; }
+        const { data: message, error: messageError } = await supabase.from("messages").insert({
+          conversation_id: activeConversation.id, sender_id: user.id, body: "Voice message",
+          message_type: "voice", reply_to_id: replyTo?.id ?? null, topic_id: topicId || null,
+        }).select("id").single();
+        if (messageError) { await supabase.storage.from("conversation-files").remove([path]); setNotice(messageError.message); setUploading(false); return; }
+        const { error: attachmentError } = await supabase.from("attachments").insert({
+          message_id: message.id, conversation_id: activeConversation.id, uploaded_by: user.id,
+          bucket_id: "conversation-files", object_path: path, file_name: fileName,
+          mime_type: blob.type || "audio/webm", size_bytes: blob.size,
+        });
+        if (attachmentError) { await supabase.storage.from("conversation-files").remove([path]); setNotice(attachmentError.message); }
+        else { setNotice("Voice message sent."); setReplyTo(null); await loadMessages(activeId); }
+        setUploading(false);
+      };
+      recorder.start();
+      setRecording(true);
+      setNotice("Recording… press Stop when you are finished.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Microphone access was denied.");
+      setRecording(false);
+    }
+  }
+
   async function uploadFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -830,7 +890,8 @@ export function Workspace() {
             <form onSubmit={sendMessage} style={{ padding: 14, borderTop: "1px solid #26334b", display: "flex", gap: 9, alignItems: "center" }}>
               <input ref={fileRef} type="file" onChange={uploadFile} disabled={uploading} style={{ display: "none" }} />
               <select aria-label="Message topic" value={topicId} onChange={(e) => setTopicId(e.target.value)} style={{ ...inputStyle, width: 130, padding: "9px 8px" }}><option value="">No topic</option>{topics.map((topic) => <option key={topic.id} value={topic.id}>{topic.name}</option>)}</select>
-              <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading} style={{ ...secondaryButton, fontSize: 19 }}>{uploading ? "…" : "＋"}</button>
+              <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading || recording} style={{ ...secondaryButton, fontSize: 19 }}>{uploading ? "…" : "＋"}</button>
+              <button type="button" onClick={() => void toggleVoiceRecording()} disabled={uploading} style={{ ...secondaryButton, color: recording ? "#ff9eae" : "#cbd8ec" }}>{recording ? "Stop voice" : "Voice"}</button>
               {(!activeConversation.is_announcement_only || ["owner","admin"].includes(activeConversation.role ?? "")) && <button type="button" onClick={() => setShowPoll(true)} style={secondaryButton}>Poll</button>}
               {(!activeConversation.is_announcement_only || ["owner","admin"].includes(activeConversation.role ?? "")) && <button type="button" onClick={() => draft.trim() ? setShowSchedule(true) : setNotice("Write a message first, then schedule it.")} style={secondaryButton}>Schedule</button>}
               <input value={draft} onChange={(e) => notifyTyping(e.target.value)} placeholder={activeConversation.is_announcement_only && activeConversation.role === "member" ? "Only admins can post here" : "Write a message…"} disabled={activeConversation.is_announcement_only && !["owner","admin"].includes(activeConversation.role ?? "")} style={{ ...inputStyle, flex: 1 }} />
