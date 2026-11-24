@@ -77,6 +77,9 @@ export function Workspace() {
   const [topics, setTopics] = useState<ConversationTopic[]>([]);
   const [topicId, setTopicId] = useState("");
   const [showTopics, setShowTopics] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [scheduleAt, setScheduleAt] = useState("");
+  const [scheduledMessages, setScheduledMessages] = useState<{id:string;body:string;send_at:string}[]>([]);
   const [newTopicName, setNewTopicName] = useState("");
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState("");
@@ -201,6 +204,15 @@ export function Workspace() {
     void supabase.from("conversation_topics").select("id,name,description").eq("conversation_id", activeId).order("created_at", { ascending: true }).then(({ data, error }) => {
       if (error) setNotice(error.message);
       else setTopics((data ?? []) as ConversationTopic[]);
+    });
+  }, [activeId, supabase]);
+
+
+  useEffect(() => {
+    if (!supabase || !activeId) { setScheduledMessages([]); return; }
+    void supabase.from("scheduled_messages").select("id,body,send_at").eq("conversation_id", activeId).is("sent_at", null).is("canceled_at", null).order("send_at", { ascending: true }).then(({ data, error }) => {
+      if (error) setNotice(error.message);
+      else setScheduledMessages((data ?? []) as {id:string;body:string;send_at:string}[]);
     });
   }, [activeId, supabase]);
 
@@ -379,6 +391,36 @@ export function Workspace() {
   }
 
 
+
+  async function scheduleMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !user || !activeConversation || !draft.trim()) return;
+    const sendAt = new Date(scheduleAt);
+    if (!scheduleAt || Number.isNaN(sendAt.getTime()) || sendAt.getTime() <= Date.now()) {
+      setNotice("Choose a future date and time for this message.");
+      return;
+    }
+    if (sendAt.getTime() > Date.now() + 30 * 24 * 60 * 60 * 1000) {
+      setNotice("Messages can be scheduled up to 30 days ahead.");
+      return;
+    }
+    const { data, error } = await supabase.from("scheduled_messages").insert({
+      conversation_id: activeConversation.id, sender_id: user.id,
+      body: draft.trim().slice(0, 20000), send_at: sendAt.toISOString(),
+    }).select("id,body,send_at").single();
+    if (error) { setNotice(error.message); return; }
+    setScheduledMessages((current) => [...current, data].sort((a,b) => a.send_at.localeCompare(b.send_at)));
+    setDraft(""); setScheduleAt(""); setShowSchedule(false);
+    setNotice("Message scheduled. The delivery worker checks every minute.");
+  }
+
+  async function cancelScheduledMessage(id: string) {
+    if (!supabase) return;
+    const { error } = await supabase.from("scheduled_messages").update({ canceled_at: new Date().toISOString() }).eq("id", id);
+    if (error) setNotice(error.message);
+    else { setScheduledMessages((current) => current.filter((item) => item.id !== id)); setNotice("Scheduled message canceled."); }
+  }
+
   async function createTopic(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!supabase || !user || !activeConversation || !newTopicName.trim()) return;
@@ -524,7 +566,7 @@ export function Workspace() {
           {activeConversation ? <>
             <header style={{ padding: "17px 20px", borderBottom: "1px solid #26334b", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div><strong style={{ fontSize: 17 }}>{activeConversation.title || "Conversation"}</strong><div style={{ color: "#8193b1", fontSize: 12, marginTop: 4 }}>{activeConversation.is_private ? "Private conversation" : "Public community"} · {onlineCount} online{activeConversation.is_announcement_only ? " · Announcements" : ""}</div></div>
-              <div style={{ display: "flex", gap: 8 }}><button onClick={() => setShowTopics(true)} style={secondaryButton}>Topics</button><button onClick={() => setShowMembers(true)} style={secondaryButton}>Members / invite</button></div>
+              <div style={{ display: "flex", gap: 8 }}><button onClick={() => setShowSchedule(true)} style={secondaryButton}>Scheduled</button><button onClick={() => setShowTopics(true)} style={secondaryButton}>Topics</button><button onClick={() => setShowMembers(true)} style={secondaryButton}>Members / invite</button></div>
             </header>
             <div aria-live="polite" style={{ flex: 1, minHeight: 400, maxHeight: "calc(100vh - 230px)", overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
               {visibleMessages.map((message) => {
@@ -560,6 +602,7 @@ export function Workspace() {
               <select aria-label="Message topic" value={topicId} onChange={(e) => setTopicId(e.target.value)} style={{ ...inputStyle, width: 130, padding: "9px 8px" }}><option value="">No topic</option>{topics.map((topic) => <option key={topic.id} value={topic.id}>{topic.name}</option>)}</select>
               <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading} style={{ ...secondaryButton, fontSize: 19 }}>{uploading ? "…" : "＋"}</button>
               {(!activeConversation.is_announcement_only || ["owner","admin"].includes(activeConversation.role ?? "")) && <button type="button" onClick={() => setShowPoll(true)} style={secondaryButton}>Poll</button>}
+              <button type="button" onClick={() => draft.trim() ? setShowSchedule(true) : setNotice("Write a message first, then schedule it.")} style={secondaryButton}>Schedule</button>
               <input value={draft} onChange={(e) => notifyTyping(e.target.value)} placeholder={activeConversation.is_announcement_only && activeConversation.role === "member" ? "Only admins can post here" : "Write a message…"} disabled={activeConversation.is_announcement_only && !["owner","admin"].includes(activeConversation.role ?? "")} style={{ ...inputStyle, flex: 1 }} />
               <button type="submit" disabled={!draft.trim() || (activeConversation.is_announcement_only && !["owner","admin"].includes(activeConversation.role ?? ""))} style={primaryButton}>Send</button>
             </form>
@@ -569,6 +612,7 @@ export function Workspace() {
       </div>
 
       {showPasswordRecovery && <div style={modalStyle}><form onSubmit={updateRecoveredPassword} style={{ ...panel, width: "min(100%, 420px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Choose a new password</h2><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} required placeholder="New password (8+ characters)" style={inputStyle} /><button disabled={busy} style={primaryButton}>Update password</button><p style={{ color: "#8193b1", fontSize: 12 }}>{notice}</p></form></div>}
+      {showSchedule && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 520px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Scheduled messages</h2><p style={{ color: "#8193b1", fontSize: 12 }}>Messages are delivered automatically by the database scheduler, which checks once per minute.</p>{draft.trim() && <form onSubmit={scheduleMessage} style={{ display: "grid", gap: 8 }}><strong style={{ fontSize: 13 }}>Schedule your current draft</strong><textarea value={draft} readOnly rows={3} style={{ ...inputStyle, opacity: .8 }} /><input type="datetime-local" value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} min={new Date(Date.now() + 60000).toISOString().slice(0,16)} required style={inputStyle} /><button style={primaryButton}>Schedule message</button></form>}<div style={{ display: "grid", gap: 8 }}><strong style={{ fontSize: 13 }}>Pending messages</strong>{scheduledMessages.map((item) => <div key={item.id} style={{ padding: 10, borderRadius: 8, background: "#14233a", display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}><div><div style={{ fontSize: 13 }}>{item.body}</div><small style={{ color: "#8193b1" }}>{new Date(item.send_at).toLocaleString()}</small></div><button onClick={() => void cancelScheduledMessage(item.id)} style={secondaryButton}>Cancel</button></div>)}{!scheduledMessages.length && <small style={{ color: "#8193b1" }}>No pending scheduled messages in this conversation.</small>}</div><button onClick={() => setShowSchedule(false)} style={secondaryButton}>Close</button></section></div>}
       {showTopics && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 460px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Conversation topics</h2><p style={{ color: "#8193b1", fontSize: 12 }}>Use topics to organise group discussions. Select a topic before sending a message.</p><div style={{ display: "grid", gap: 7 }}>{topics.map((topic) => <button key={topic.id} onClick={() => { setTopicId(topic.id); setShowTopics(false); }} style={{ ...secondaryButton, textAlign: "left" }}>#{topic.name}{topicId === topic.id ? " · Selected" : ""}</button>)}{!topics.length && <small style={{ color: "#8193b1" }}>No topics yet.</small>}</div>{["owner","admin"].includes(activeConversation?.role ?? "") && <form onSubmit={createTopic} style={{ display: "flex", gap: 8 }}><input value={newTopicName} onChange={(e) => setNewTopicName(e.target.value)} maxLength={80} placeholder="New topic name" required style={inputStyle} /><button style={primaryButton}>Add</button></form>}<button onClick={() => { setTopicId(""); setShowTopics(false); }} style={secondaryButton}>Clear topic / close</button></section></div>}
       {showPoll && <div style={modalStyle}><form onSubmit={createPoll} style={{ ...panel, width: "min(100%, 480px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Create a poll</h2><input value={pollQuestion} onChange={(e) => setPollQuestion(e.target.value)} maxLength={500} required placeholder="Ask a question" style={inputStyle} /><textarea value={pollOptions} onChange={(e) => setPollOptions(e.target.value)} rows={5} placeholder={"One answer per line\nOption 2"} style={{ ...inputStyle, resize: "vertical" }} /><label style={{ display: "flex", gap: 8, alignItems: "center", color: "#cbd8ec", fontSize: 13 }}><input type="checkbox" checked={pollMultiple} onChange={(e) => setPollMultiple(e.target.checked)} /> Allow multiple answers</label><small style={{ color: "#8193b1" }}>Add 2–10 options, one per line. Votes are visible to conversation members.</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowPoll(false)} style={secondaryButton}>Cancel</button><button disabled={busy} style={primaryButton}>Share poll</button></div></form></div>}
       {showCreate && <div style={modalStyle}><form onSubmit={createConversation} style={{ ...panel, width: "min(100%, 440px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Create a conversation</h2><div style={{ display: "flex", gap: 8 }}><button type="button" onClick={() => setNewType("group")} style={{ ...secondaryButton, flex: 1, background: newType === "group" ? "#20365c" : "transparent" }}>Group</button><button type="button" onClick={() => setNewType("channel")} style={{ ...secondaryButton, flex: 1, background: newType === "channel" ? "#20365c" : "transparent" }}>Channel</button></div><input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder={newType === "group" ? "Group name" : "Channel name"} maxLength={100} required style={inputStyle} /><p style={{ color: "#8193b1", fontSize: 12 }}>{newType === "channel" ? "Channels are announcement-first spaces. Only owners and admins can post." : "Groups are private. Add people by their SyncSpace username after creation."}</p><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowCreate(false)} style={secondaryButton}>Cancel</button><button disabled={busy} style={primaryButton}>Create</button></div></form></div>}
