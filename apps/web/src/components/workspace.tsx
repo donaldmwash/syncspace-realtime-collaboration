@@ -253,6 +253,18 @@ export function Workspace() {
     })();
   }, [user, supabase, loadConversations]);
 
+  const refreshConversationMembers = useCallback(async (conversationId: string) => {
+    if (!supabase) return;
+    const { data: rows, error } = await supabase.from("conversation_members").select("user_id,role").eq("conversation_id", conversationId);
+    if (error) { setNotice(error.message); return; }
+    const ids = (rows ?? []).map((row: any) => row.user_id);
+    const { data: profiles } = ids.length ? await supabase.from("profiles").select("id,display_name,username,avatar_url").in("id", ids) : { data: [] };
+    setConversationMembers((rows ?? []).map((row: any) => {
+      const profile = (profiles ?? []).find((item: any) => item.id === row.user_id);
+      return { ...row, display_name: profile?.display_name ?? "Member", username: profile?.username ?? null, avatar_url: profile?.avatar_url ?? null };
+    }));
+  }, [supabase]);
+
   useEffect(() => {
     if (!activeId || !supabase || !user) { setMessages([]); return; }
     void loadMessages(activeId);
@@ -383,17 +395,7 @@ export function Workspace() {
   }, [user, supabase, pendingInvite, loadConversations]);
 
 
-  const refreshConversationMembers = useCallback(async (conversationId: string) => {
-    if (!supabase) return;
-    const { data: rows, error } = await supabase.from("conversation_members").select("user_id,role").eq("conversation_id", conversationId);
-    if (error) { setNotice(error.message); return; }
-    const ids = (rows ?? []).map((row: any) => row.user_id);
-    const { data: profiles } = ids.length ? await supabase.from("profiles").select("id,display_name,username,avatar_url").in("id", ids) : { data: [] };
-    setConversationMembers((rows ?? []).map((row: any) => {
-      const profile = (profiles ?? []).find((item: any) => item.id === row.user_id);
-      return { ...row, display_name: profile?.display_name ?? "Member", username: profile?.username ?? null, avatar_url: profile?.avatar_url ?? null };
-    }));
-  }, [supabase]);
+
 
   useEffect(() => { if (user && supabase) void loadFolders(); }, [user, supabase]);
   useEffect(() => {
