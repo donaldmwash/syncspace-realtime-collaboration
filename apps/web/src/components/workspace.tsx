@@ -766,7 +766,7 @@ export function Workspace() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file || !supabase || !user || !activeConversation) return;
-    if (/\\.(exe|dll|bat|cmd|ps1|sh|msi|apk|com|scr|vbs|js|html?|svg|jar)$/i.test(file.name) || file.type === "image/svg+xml") { setNotice("This potentially executable file type is blocked."); return; }
+    if (/\.(exe|dll|bat|cmd|ps1|sh|msi|apk|com|scr|vbs|js|html?|svg|jar)$/i.test(file.name) || file.type === "image/svg+xml") { setNotice("This potentially executable file type is blocked."); return; }
     if (file.size > 50 * 1024 * 1024) { setNotice("Files must be 50 MB or smaller."); return; }
     setUploading(true);
     const safeName = file.name.replace(/[^\w.\-() ]/g, "_").slice(0, 120) || "attachment";
