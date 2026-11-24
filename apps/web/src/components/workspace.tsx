@@ -84,6 +84,8 @@ export function Workspace() {
   const [showTopics, setShowTopics] = useState(false);
   const [forwardMessageId, setForwardMessageId] = useState("");
   const [showSaved, setShowSaved] = useState(false);
+  const [showPinned, setShowPinned] = useState(false);
+  const [pinnedMessages, setPinnedMessages] = useState<{id:string;message_id:string;message?:{id:string;body:string|null;conversation_id:string;created_at:string}}[]>([]);
   const [savedMessages, setSavedMessages] = useState<{message_id:string;created_at:string;message?:{id:string;body:string|null;conversation_id:string;created_at:string}}[]>([]);
   const [showSchedule, setShowSchedule] = useState(false);
   const [statuses, setStatuses] = useState<StatusItem[]>([]);
@@ -542,6 +544,24 @@ export function Workspace() {
 
 
 
+
+  async function openPinnedMessages() {
+    if (!supabase || !activeConversation) return;
+    const { data: pins, error } = await supabase.from("message_pins").select("id,message_id").eq("conversation_id", activeConversation.id).order("created_at", { ascending: false });
+    if (error) { setNotice(error.message); return; }
+    const ids = (pins ?? []).map((item: any) => item.message_id);
+    const { data: rows } = ids.length ? await supabase.from("messages").select("id,body,conversation_id,created_at").in("id", ids) : { data: [] };
+    setPinnedMessages((pins ?? []).map((item: any) => ({ ...item, message: (rows ?? []).find((row: any) => row.id === item.message_id) })));
+    setShowPinned(true);
+  }
+
+  async function unpinMessage(pinId: string) {
+    if (!supabase) return;
+    const { error } = await supabase.from("message_pins").delete().eq("id", pinId);
+    if (error) setNotice(error.message);
+    else setPinnedMessages((current) => current.filter((item) => item.id !== pinId));
+  }
+
   async function openSavedMessages() {
     if (!supabase || !user) return;
     const { data: saves, error } = await supabase.from("saved_messages").select("message_id,created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(200);
@@ -755,7 +775,7 @@ export function Workspace() {
           {activeConversation ? <>
             <header style={{ padding: "17px 20px", borderBottom: "1px solid #26334b", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div><strong style={{ fontSize: 17 }}>{activeConversation.title || "Conversation"}</strong><div style={{ color: "#8193b1", fontSize: 12, marginTop: 4 }}>{activeConversation.is_private ? "Private conversation" : "Public community"} · {onlineCount} online{activeConversation.is_announcement_only ? " · Announcements" : ""}</div></div>
-              <div style={{ display: "flex", gap: 8 }}><button onClick={() => setShowSchedule(true)} style={secondaryButton}>Scheduled</button><button onClick={() => setShowTopics(true)} style={secondaryButton}>Topics</button><button onClick={() => setShowMembers(true)} style={secondaryButton}>Members / invite</button></div>
+              <div style={{ display: "flex", gap: 8 }}><button onClick={() => setShowSchedule(true)} style={secondaryButton}>Scheduled</button><button onClick={() => void openPinnedMessages()} style={secondaryButton}>Pinned</button><button onClick={() => setShowTopics(true)} style={secondaryButton}>Topics</button><button onClick={() => setShowMembers(true)} style={secondaryButton}>Members / invite</button></div>
             </header>
             <div aria-live="polite" style={{ flex: 1, minHeight: 400, maxHeight: "calc(100vh - 230px)", overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
               {visibleMessages.map((message) => {
@@ -802,6 +822,7 @@ export function Workspace() {
       </div>
 
       {showPasswordRecovery && <div style={modalStyle}><form onSubmit={updateRecoveredPassword} style={{ ...panel, width: "min(100%, 420px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Choose a new password</h2><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} required placeholder="New password (8+ characters)" style={inputStyle} /><button disabled={busy} style={primaryButton}>Update password</button><p style={{ color: "#8193b1", fontSize: 12 }}>{notice}</p></form></div>}
+      {showPinned && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 560px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Pinned messages</h2>{pinnedMessages.filter((item) => item.message).map((item) => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", padding: 8, background: "#14233a", borderRadius: 8 }}><span style={{ fontSize: 13 }}>{item.message?.body || "Pinned attachment"}</span>{["owner","admin"].includes(activeConversation?.role ?? "") && <button onClick={() => void unpinMessage(item.id)} style={secondaryButton}>Unpin</button>}</div>)}{!pinnedMessages.some((item) => item.message) && <small style={{ color: "#8193b1" }}>No pinned messages in this conversation.</small>}<button onClick={() => setShowPinned(false)} style={secondaryButton}>Close</button></section></div>}
       {showSaved && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 560px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Saved Messages</h2>{savedMessages.filter((item) => item.message).map((item) => <button key={item.message_id} onClick={() => { setActiveId(item.message!.conversation_id); setShowSaved(false); }} style={{ ...secondaryButton, textAlign: "left" }}><strong>{item.message?.body || "Saved attachment"}</strong><small style={{ display: "block", color: "#8193b1" }}>{new Date(item.message?.created_at || item.created_at).toLocaleString()}</small></button>)}{!savedMessages.some((item) => item.message) && <small style={{ color: "#8193b1" }}>No saved messages yet. Use Save beneath a message to keep it here.</small>}<button onClick={() => setShowSaved(false)} style={secondaryButton}>Close</button></section></div>}
       {forwardMessageId && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 460px)", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Forward message</h2><p style={{ color: "#8193b1", fontSize: 12 }}>Choose a conversation to forward this text message into.</p>{conversations.filter((item) => item.id !== activeId).map((conversation) => <button key={conversation.id} onClick={() => void forwardTo(conversation.id)} style={{ ...secondaryButton, textAlign: "left" }}>{conversation.title || "Conversation"}</button>)}<button onClick={() => setForwardMessageId("")} style={secondaryButton}>Cancel</button></section></div>}
       {showAddStatus && <div style={modalStyle}><form onSubmit={createStatus} style={{ ...panel, width: "min(100%, 460px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Share a status</h2><input type="file" accept="image/*,video/*" onChange={(e) => setStatusFile(e.target.files?.[0] ?? null)} style={{ color: "#cbd8ec" }} /><textarea value={statusCaption} onChange={(e) => setStatusCaption(e.target.value)} maxLength={500} rows={3} placeholder="Add a caption (optional)" style={inputStyle} /><small style={{ color: "#8193b1" }}>Only people who share a conversation with you can view your status. It expires after 24 hours.</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowAddStatus(false)} style={secondaryButton}>Cancel</button><button disabled={!statusFile} style={primaryButton}>Share status</button></div></form></div>}
