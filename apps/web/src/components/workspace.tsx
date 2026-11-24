@@ -179,6 +179,9 @@ export function Workspace() {
       .on("postgres_changes", { event: "*", schema: "public", table: "message_reactions" }, () => void loadMessages(activeId))
       .on("postgres_changes", { event: "*", schema: "public", table: "poll_votes" }, () => void loadMessages(activeId))
       .on("postgres_changes", { event: "*", schema: "public", table: "poll_options" }, () => void loadMessages(activeId))
+      .on("postgres_changes", { event: "*", schema: "public", table: "scheduled_messages", filter: "conversation_id=eq." + activeId }, () => {
+        void supabase.from("scheduled_messages").select("id,body,send_at").eq("conversation_id", activeId).is("sent_at", null).is("canceled_at", null).order("send_at", { ascending: true }).then(({ data }) => setScheduledMessages((data ?? []) as {id:string;body:string;send_at:string}[]));
+      })
       .on("broadcast", { event: "typing" }, ({ payload }) => {
         if (payload?.userId !== user.id) {
           setTypingName(String(payload?.name ?? "Someone"));
