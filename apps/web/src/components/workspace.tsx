@@ -231,13 +231,17 @@ export function Workspace() {
   async function refreshStatuses() {
     if (!supabase) return;
     const { data, error } = await supabase.from("user_statuses")
-      .select("id,user_id,media_path,media_type,caption,expires_at,created_at,owner:profiles!user_statuses_user_id_fkey(display_name,avatar_url)")
+      .select("id,user_id,media_path,media_type,caption,expires_at,created_at")
       .gt("expires_at", new Date().toISOString())
       .order("created_at", { ascending: false });
     if (error) { setNotice(error.message); return; }
-    const hydrated = await Promise.all((data ?? []).map(async (row: any) => {
+    const rows = data ?? [];
+    const ownerIds = [...new Set(rows.map((row: any) => row.user_id))];
+    const { data: profiles } = ownerIds.length ? await supabase.from("profiles").select("id,display_name,avatar_url").in("id", ownerIds) : { data: [] };
+    const hydrated = await Promise.all(rows.map(async (row: any) => {
       const { data: signed } = await supabase.storage.from("statuses").createSignedUrl(row.media_path, 3600);
-      return { ...row, owner: Array.isArray(row.owner) ? row.owner[0] : row.owner, signedUrl: signed?.signedUrl } as StatusItem;
+      const owner = (profiles ?? []).find((profile: any) => profile.id === row.user_id);
+      return { ...row, owner: owner ? { display_name: owner.display_name, avatar_url: owner.avatar_url } : undefined, signedUrl: signed?.signedUrl } as StatusItem;
     }));
     setStatuses(hydrated);
   }
