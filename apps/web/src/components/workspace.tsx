@@ -83,6 +83,8 @@ export function Workspace() {
   const [topicId, setTopicId] = useState("");
   const [showTopics, setShowTopics] = useState(false);
   const [forwardMessageId, setForwardMessageId] = useState("");
+  const [showSaved, setShowSaved] = useState(false);
+  const [savedMessages, setSavedMessages] = useState<{message_id:string;created_at:string;message?:{id:string;body:string|null;conversation_id:string;created_at:string}}[]>([]);
   const [showSchedule, setShowSchedule] = useState(false);
   const [statuses, setStatuses] = useState<StatusItem[]>([]);
   const [showStatuses, setShowStatuses] = useState(false);
@@ -539,6 +541,17 @@ export function Workspace() {
   }
 
 
+
+  async function openSavedMessages() {
+    if (!supabase || !user) return;
+    const { data: saves, error } = await supabase.from("saved_messages").select("message_id,created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(200);
+    if (error) { setNotice(error.message); return; }
+    const ids = (saves ?? []).map((item: any) => item.message_id);
+    const { data: rows } = ids.length ? await supabase.from("messages").select("id,body,conversation_id,created_at").in("id", ids) : { data: [] };
+    setSavedMessages((saves ?? []).map((item: any) => ({ ...item, message: (rows ?? []).find((row: any) => row.id === item.message_id) })));
+    setShowSaved(true);
+  }
+
   async function forwardTo(targetId: string) {
     if (!supabase || !user) return;
     const original = messages.find((item) => item.id === forwardMessageId);
@@ -724,6 +737,7 @@ export function Workspace() {
           </div>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search messages…" style={{ ...inputStyle, marginBottom: 12 }} />
           <div style={{ display: "flex", gap: 7, margin: "4px 0 12px" }}><button onClick={() => setShowAddStatus(true)} style={{ ...secondaryButton, flex: 1 }}>＋ Add status</button><button onClick={() => { void refreshStatuses(); setShowStatuses(true); }} style={{ ...secondaryButton, flex: 1 }}>Status · {statuses.length}</button></div>
+          <button onClick={() => void openSavedMessages()} style={{ ...secondaryButton, width: "100%", marginBottom: 10, textAlign: "left" }}>★ Saved Messages</button>
           <div style={{ color: "#7184a3", fontSize: 11, letterSpacing: 1.5, margin: "8px 0" }}>YOUR CONVERSATIONS</div>
           <div style={{ display: "grid", gap: 7, overflowY: "auto" }}>
             {conversations.map((conversation) => (
@@ -788,6 +802,7 @@ export function Workspace() {
       </div>
 
       {showPasswordRecovery && <div style={modalStyle}><form onSubmit={updateRecoveredPassword} style={{ ...panel, width: "min(100%, 420px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Choose a new password</h2><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} required placeholder="New password (8+ characters)" style={inputStyle} /><button disabled={busy} style={primaryButton}>Update password</button><p style={{ color: "#8193b1", fontSize: 12 }}>{notice}</p></form></div>}
+      {showSaved && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 560px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Saved Messages</h2>{savedMessages.filter((item) => item.message).map((item) => <button key={item.message_id} onClick={() => { setActiveId(item.message!.conversation_id); setShowSaved(false); }} style={{ ...secondaryButton, textAlign: "left" }}><strong>{item.message?.body || "Saved attachment"}</strong><small style={{ display: "block", color: "#8193b1" }}>{new Date(item.message?.created_at || item.created_at).toLocaleString()}</small></button>)}{!savedMessages.some((item) => item.message) && <small style={{ color: "#8193b1" }}>No saved messages yet. Use Save beneath a message to keep it here.</small>}<button onClick={() => setShowSaved(false)} style={secondaryButton}>Close</button></section></div>}
       {forwardMessageId && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 460px)", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Forward message</h2><p style={{ color: "#8193b1", fontSize: 12 }}>Choose a conversation to forward this text message into.</p>{conversations.filter((item) => item.id !== activeId).map((conversation) => <button key={conversation.id} onClick={() => void forwardTo(conversation.id)} style={{ ...secondaryButton, textAlign: "left" }}>{conversation.title || "Conversation"}</button>)}<button onClick={() => setForwardMessageId("")} style={secondaryButton}>Cancel</button></section></div>}
       {showAddStatus && <div style={modalStyle}><form onSubmit={createStatus} style={{ ...panel, width: "min(100%, 460px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Share a status</h2><input type="file" accept="image/*,video/*" onChange={(e) => setStatusFile(e.target.files?.[0] ?? null)} style={{ color: "#cbd8ec" }} /><textarea value={statusCaption} onChange={(e) => setStatusCaption(e.target.value)} maxLength={500} rows={3} placeholder="Add a caption (optional)" style={inputStyle} /><small style={{ color: "#8193b1" }}>Only people who share a conversation with you can view your status. It expires after 24 hours.</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowAddStatus(false)} style={secondaryButton}>Cancel</button><button disabled={!statusFile} style={primaryButton}>Share status</button></div></form></div>}
       {showStatuses && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 560px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Recent statuses</h2>{statuses.map((status) => <button key={status.id} onClick={() => setActiveStatusId(status.id)} style={{ ...secondaryButton, display: "flex", gap: 12, alignItems: "center", textAlign: "left" }}><img src={status.owner?.avatar_url || "https://www.gravatar.com/avatar/?d=mp"} alt="" style={{ width: 38, height: 38, borderRadius: "50%", objectFit: "cover" }} /><span><strong>{status.owner?.display_name || "Member"}</strong><small style={{ display: "block", color: "#8193b1" }}>{status.caption || "Status update"} · expires {new Date(status.expires_at).toLocaleTimeString()}</small></span></button>)}{!statuses.length && <small style={{ color: "#8193b1" }}>No active statuses from your contacts.</small>}<button onClick={() => setShowStatuses(false)} style={secondaryButton}>Close</button></section></div>}
