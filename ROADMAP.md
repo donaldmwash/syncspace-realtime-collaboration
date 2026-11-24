@@ -83,4 +83,4 @@ This tracker distinguishes database groundwork from user-facing, tested function
 
 ## Release rule
 
-A feature is only marked complete after its frontend, backend, authorization, persistence (where applicable), failure states and relevant automated/manual tests are implemented. Database schema alone is foundation work, not feature completion. The current branch has a successful Vercel preview build, but live multi-user acceptance tests are still required before production release.
+A feature is only marked complete after its frontend, backend, authorization, persistence (where applicable), failure states and relevant automated/manual tests are implemented. Database schema alone is foundation work, not feature completion. The latest branch source passed a clean Node 22 Next.js production build, workspace type checks and the existing automated tests in a Vercel sandbox. A fresh preview deployment is temporarily blocked by the Vercel team 100-deployments-per-day API limit. Live multi-user acceptance tests and Auth redirect configuration are still required before production release.
