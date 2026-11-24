@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { Server } from "socket.io";
+import { randomUUID } from "node:crypto";
 
 type ChatMessage = {
   id: string;
@@ -8,9 +9,33 @@ type ChatMessage = {
   text: string;
   createdAt: string;
   editedAt?: string;
+  attachment?: { id: string; name: string; size: number; type: string };
 };
 
-const httpServer = createServer((_, res) => {
+type StoredFile = { roomId: string; name: string; type: string; bytes: Buffer };
+const storedFiles = new Map<string, StoredFile>();
+const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const BLOCKED_EXTENSIONS = /\\.(?:exe|dll|bat|cmd|com|msi|sh|ps1|app|dmg|apk|jar|scr)$/i;
+
+const httpServer = createServer((req, res) => {
+  const pathname = new URL(req.url || "/", "http://localhost").pathname;
+  if (req.method === "GET" && pathname.startsWith("/files/")) {
+    const fileId = pathname.slice("/files/".length);
+    const file = storedFiles.get(fileId);
+    if (!file) { res.writeHead(404); res.end("File not found"); return; }
+    const safeName = file.name.replace(/[\\r\\n"]/g, "_");
+    const inline = file.type.startsWith("image/") || file.type === "application/pdf";
+    res.writeHead(200, {
+      "content-type": file.type,
+      "content-length": file.bytes.length,
+      "content-disposition": `${inline ? "inline" : "attachment"}; filename="${safeName}"`,
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+      "access-control-allow-origin": process.env.WEB_ORIGIN?.split(",").join(", ") || "*",
+    });
+    res.end(file.bytes);
+    return;
+  }
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ service: "syncspace-realtime", status: "ok" }));
 });
@@ -20,7 +45,7 @@ const io = new Server(httpServer, {
     origin: process.env.WEB_ORIGIN?.split(",") ?? "*",
     methods: ["GET", "POST"],
   },
-  maxHttpBufferSize: 1e6,
+  maxHttpBufferSize: 8e6,
 });
 
 const roomMessages = new Map<string, ChatMessage[]>();
@@ -51,6 +76,31 @@ io.on("connection", (socket) => {
       createdAt: new Date().toISOString(),
     };
 
+    const history = roomMessages.get(roomId) ?? [];
+    history.push(message);
+    if (history.length > 200) history.splice(0, history.length - 200);
+    roomMessages.set(roomId, history);
+    io.to(roomId).emit("chat:message", message);
+  });
+
+  socket.on("chat:upload", (payload: { name?: unknown; type?: unknown; data?: unknown }) => {
+    if (typeof payload?.name !== "string" || typeof payload?.type !== "string" || typeof payload?.data !== "string") return;
+    const name = payload.name.replace(/[\\/\\\\\\r\\n\\u0000-\\u001f]/g, "_").trim().slice(0, 180);
+    if (!name || BLOCKED_EXTENSIONS.test(name)) { socket.emit("chat:upload-error", "This file type is not allowed."); return; }
+    const match = payload.data.match(/^data:([\\w.+-]+\\/[\\w.+-]+);base64,([A-Za-z0-9+/=]+)$/);
+    if (!match || match[1] !== payload.type || !/^([\\w.+-]+\\/[\\w.+-]+)$/.test(payload.type)) {
+      socket.emit("chat:upload-error", "The selected file could not be read."); return;
+    }
+    const bytes = Buffer.from(match[2], "base64");
+    if (!bytes.length || bytes.length > MAX_FILE_SIZE) { socket.emit("chat:upload-error", "Files must be 5 MB or smaller."); return; }
+    if (storedFiles.size >= 500) { socket.emit("chat:upload-error", "The room has reached its temporary attachment limit."); return; }
+    const id = randomUUID();
+    storedFiles.set(id, { roomId, name, type: payload.type, bytes });
+    const message: ChatMessage = {
+      id: `file-${id}`, sender: displayName, senderId: authorId, text: "",
+      createdAt: new Date().toISOString(),
+      attachment: { id, name, size: bytes.length, type: payload.type },
+    };
     const history = roomMessages.get(roomId) ?? [];
     history.push(message);
     if (history.length > 200) history.splice(0, history.length - 200);
