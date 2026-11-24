@@ -314,7 +314,6 @@ export function Workspace() {
     });
     if (error) { setNotice(error.message); return; }
     setDraft(""); setReplyTo(null);
-    await supabase.from("conversations").update({ last_message_at: new Date().toISOString() }).eq("id", activeConversation.id);
   }
 
   async function editMessage(messageId: string) {
