@@ -601,7 +601,7 @@ export function Workspace() {
       });
       if (attachmentError) {
         await supabase.storage.from("conversation-files").remove([copiedPath]);
-        await supabase.from("messages").delete().eq("id", forwarded.id).eq("sender_id", user.id);
+        await supabase.from("messages").update({ deleted_at: new Date().toISOString(), body: "Forward failed." }).eq("id", forwarded.id).eq("sender_id", user.id);
         setNotice(attachmentError.message); return;
       }
     }
