@@ -26,6 +26,7 @@ type Message = {
   message_type: string;
   reply_to_id: string | null;
   topic_id?: string | null;
+  forwarded_from_id?: string | null;
   topic?: { name: string } | { name: string }[] | null;
   created_at: string;
   edited_at: string | null;
@@ -81,6 +82,7 @@ export function Workspace() {
   const [topics, setTopics] = useState<ConversationTopic[]>([]);
   const [topicId, setTopicId] = useState("");
   const [showTopics, setShowTopics] = useState(false);
+  const [forwardMessageId, setForwardMessageId] = useState("");
   const [showSchedule, setShowSchedule] = useState(false);
   const [statuses, setStatuses] = useState<StatusItem[]>([]);
   const [showStatuses, setShowStatuses] = useState(false);
@@ -138,7 +140,7 @@ export function Workspace() {
     if (!supabase || !conversationId) return;
     const { data, error } = await supabase
       .from("messages")
-      .select("id,conversation_id,sender_id,body,message_type,reply_to_id,topic_id,created_at,edited_at,deleted_at,sender:profiles!messages_sender_id_fkey(display_name,avatar_url),topic:conversation_topics(name),attachments(id,file_name,mime_type,size_bytes,object_path),reactions:message_reactions(emoji,user_id),receipts:message_receipts(user_id,read_at),polls(id,question,allows_multiple,closes_at,poll_options(id,label,position),poll_votes(option_id,user_id)),reply:messages!messages_reply_to_id_fkey(id,body,sender:profiles!messages_sender_id_fkey(display_name))")
+      .select("id,conversation_id,sender_id,body,message_type,reply_to_id,topic_id,forwarded_from_id,created_at,edited_at,deleted_at,sender:profiles!messages_sender_id_fkey(display_name,avatar_url),topic:conversation_topics(name),attachments(id,file_name,mime_type,size_bytes,object_path),reactions:message_reactions(emoji,user_id),receipts:message_receipts(user_id,read_at),polls(id,question,allows_multiple,closes_at,poll_options(id,label,position),poll_votes(option_id,user_id)),reply:messages!messages_reply_to_id_fkey(id,body,sender:profiles!messages_sender_id_fkey(display_name))")
       .eq("conversation_id", conversationId)
       .is("deleted_at", null)
       .order("created_at", { ascending: true })
@@ -536,6 +538,26 @@ export function Workspace() {
     setNotice(error ? (error.code === "23505" ? "That message is already pinned." : error.message) : "Message pinned.");
   }
 
+
+  async function forwardTo(targetId: string) {
+    if (!supabase || !user) return;
+    const original = messages.find((item) => item.id === forwardMessageId);
+    if (!original) return;
+    if (!original.body || original.attachments?.length) {
+      setNotice("Forwarding text messages is supported. Forwarding attachments will be added in a later pass.");
+      return;
+    }
+    const { error } = await supabase.from("messages").insert({
+      conversation_id: targetId, sender_id: user.id, body: original.body,
+      message_type: original.message_type, forwarded_from_id: original.id,
+    });
+    if (error) { setNotice(error.message); return; }
+    setForwardMessageId("");
+    await loadConversations(user);
+    setActiveId(targetId);
+    setNotice("Message forwarded.");
+  }
+
   async function saveMessage(message: Message) {
     if (!supabase || !user) return;
     const { error } = await supabase.from("saved_messages").insert({ user_id: user.id, message_id: message.id });
@@ -728,7 +750,7 @@ export function Workspace() {
                 const poll = Array.isArray(message.polls) ? message.polls[0] : message.polls;
                 const reply = Array.isArray(message.reply) ? message.reply[0] : message.reply;
                 return <article key={message.id} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "min(82%, 720px)", minWidth: 130 }}>
-                  <div style={{ color: mine ? "#9db8ff" : "#8ce0b0", fontSize: 11, margin: "0 5px 5px" }}>{mine ? "You" : message.sender?.display_name || "Member"}{message.topic && <span> · #{(Array.isArray(message.topic) ? message.topic[0] : message.topic)?.name}</span>} · {new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{message.edited_at ? " · Edited" : ""}{mine && message.receipts?.some((receipt) => receipt.read_at) ? " · ✓✓ Read" : ""}</div>
+                  <div style={{ color: mine ? "#9db8ff" : "#8ce0b0", fontSize: 11, margin: "0 5px 5px" }}>{message.forwarded_from_id ? "↪ Forwarded · " : ""}{mine ? "You" : message.sender?.display_name || "Member"}{message.topic && <span> · #{(Array.isArray(message.topic) ? message.topic[0] : message.topic)?.name}</span>} · {new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{message.edited_at ? " · Edited" : ""}{mine && message.receipts?.some((receipt) => receipt.read_at) ? " · ✓✓ Read" : ""}</div>
                   {reply && <div style={{ padding: "7px 10px", borderLeft: "3px solid #86a8ff", background: "#111f34", borderRadius: 7, color: "#aebfda", fontSize: 11, marginBottom: 4 }}>Replying to {reply.sender?.display_name || "member"}: {(reply.body || "Attachment").slice(0, 120)}</div>}
                   {editingId === message.id ? <div style={{ ...panel, padding: 9 }}><textarea value={editDraft} onChange={(e) => setEditDraft(e.target.value)} style={{ ...inputStyle, minHeight: 80 }} /><div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}><button onClick={() => setEditingId("")} style={secondaryButton}>Cancel</button><button onClick={() => void editMessage(message.id)} style={primaryButton}>Save</button></div></div> : <div style={{ background: mine ? "#20365c" : "#1a2940", borderRadius: 13, padding: "11px 14px", lineHeight: 1.6, overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>
                     {poll ? <div style={{ display: "grid", gap: 9, minWidth: 230 }}><strong>{poll.question}</strong>{[...poll.poll_options].sort((a,b) => a.position-b.position).map((option) => { const count = poll.poll_votes.filter((vote) => vote.option_id === option.id).length; const selected = poll.poll_votes.some((vote) => vote.option_id === option.id && vote.user_id === user.id); const total = poll.poll_votes.length; return <button key={option.id} onClick={() => void votePoll(poll, option.id)} disabled={!!poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now()} style={{ textAlign: "left", padding: 9, borderRadius: 8, border: "1px solid " + (selected ? "#86a8ff" : "#40516c"), background: selected ? "#263f68" : "#15243a", color: "#e7eefb" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>{selected ? "✓ " : ""}{option.label}</span><small>{count}</small></div><div style={{ height: 4, background: "#34445d", borderRadius: 5, marginTop: 7 }}><div style={{ width: (total ? Math.round(count / total * 100) : 0) + "%", height: "100%", background: "#86a8ff", borderRadius: 5 }} /></div></button>; })}<small style={{ color: "#aebfda" }}>{poll.poll_votes.length} vote(s) · {poll.allows_multiple ? "Multiple answers" : "Choose one"}{poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now() ? " · Closed" : ""}</small></div> : file ? <div style={{ display: "grid", gap: 7 }}>
@@ -741,6 +763,7 @@ export function Workspace() {
                     {["👍","❤️","😂"].map((emoji) => <button key={emoji} onClick={() => void toggleReaction(message, emoji)} style={{ ...secondaryButton, padding: "3px 7px", fontSize: 11, borderColor: message.reactions?.some((r) => r.emoji === emoji && r.user_id === user.id) ? "#86a8ff" : "#354663" }}>{emoji} {message.reactions?.filter((r) => r.emoji === emoji).length || ""}</button>)}
                     <button onClick={() => setReplyTo(message)} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>↩ Reply</button>
                     <button onClick={() => void saveMessage(message)} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Save</button>
+                    <button onClick={() => setForwardMessageId(message.id)} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Forward</button>
                     {["owner","admin"].includes(activeConversation.role ?? "") && <button onClick={() => void pinMessage(message)} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Pin</button>}
                     {mine && <><button onClick={() => { setEditingId(message.id); setEditDraft(message.body ?? ""); }} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Edit</button><button onClick={() => void deleteMessage(message.id)} style={{ border: 0, background: "transparent", color: "#ff9eae", fontSize: 11, cursor: "pointer" }}>Delete</button></>}
                   </div>
@@ -765,6 +788,7 @@ export function Workspace() {
       </div>
 
       {showPasswordRecovery && <div style={modalStyle}><form onSubmit={updateRecoveredPassword} style={{ ...panel, width: "min(100%, 420px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Choose a new password</h2><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} required placeholder="New password (8+ characters)" style={inputStyle} /><button disabled={busy} style={primaryButton}>Update password</button><p style={{ color: "#8193b1", fontSize: 12 }}>{notice}</p></form></div>}
+      {forwardMessageId && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 460px)", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Forward message</h2><p style={{ color: "#8193b1", fontSize: 12 }}>Choose a conversation to forward this text message into.</p>{conversations.filter((item) => item.id !== activeId).map((conversation) => <button key={conversation.id} onClick={() => void forwardTo(conversation.id)} style={{ ...secondaryButton, textAlign: "left" }}>{conversation.title || "Conversation"}</button>)}<button onClick={() => setForwardMessageId("")} style={secondaryButton}>Cancel</button></section></div>}
       {showAddStatus && <div style={modalStyle}><form onSubmit={createStatus} style={{ ...panel, width: "min(100%, 460px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Share a status</h2><input type="file" accept="image/*,video/*" onChange={(e) => setStatusFile(e.target.files?.[0] ?? null)} style={{ color: "#cbd8ec" }} /><textarea value={statusCaption} onChange={(e) => setStatusCaption(e.target.value)} maxLength={500} rows={3} placeholder="Add a caption (optional)" style={inputStyle} /><small style={{ color: "#8193b1" }}>Only people who share a conversation with you can view your status. It expires after 24 hours.</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowAddStatus(false)} style={secondaryButton}>Cancel</button><button disabled={!statusFile} style={primaryButton}>Share status</button></div></form></div>}
       {showStatuses && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 560px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Recent statuses</h2>{statuses.map((status) => <button key={status.id} onClick={() => setActiveStatusId(status.id)} style={{ ...secondaryButton, display: "flex", gap: 12, alignItems: "center", textAlign: "left" }}><img src={status.owner?.avatar_url || "https://www.gravatar.com/avatar/?d=mp"} alt="" style={{ width: 38, height: 38, borderRadius: "50%", objectFit: "cover" }} /><span><strong>{status.owner?.display_name || "Member"}</strong><small style={{ display: "block", color: "#8193b1" }}>{status.caption || "Status update"} · expires {new Date(status.expires_at).toLocaleTimeString()}</small></span></button>)}{!statuses.length && <small style={{ color: "#8193b1" }}>No active statuses from your contacts.</small>}<button onClick={() => setShowStatuses(false)} style={secondaryButton}>Close</button></section></div>}
       {activeStatusId && (() => { const status = statuses.find((item) => item.id === activeStatusId); return status ? <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 680px)", maxHeight: "90vh", padding: 16, display: "grid", gap: 10 }}><div style={{ display: "flex", justifyContent: "space-between" }}><strong>{status.owner?.display_name || "Member"}</strong><button onClick={() => setActiveStatusId("")} style={secondaryButton}>Close</button></div>{status.media_type?.startsWith("video/") ? <video src={status.signedUrl} controls autoPlay style={{ maxWidth: "100%", maxHeight: "70vh", margin: "0 auto" }} /> : <img src={status.signedUrl} alt={status.caption || "Status"} style={{ maxWidth: "100%", maxHeight: "70vh", objectFit: "contain", margin: "0 auto" }} />}<p style={{ margin: 0, color: "#cbd8ec" }}>{status.caption}</p><small style={{ color: "#8193b1" }}>Expires {new Date(status.expires_at).toLocaleString()}</small></section></div> : null; })()}
