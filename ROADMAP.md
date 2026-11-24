@@ -28,11 +28,11 @@ This tracker distinguishes database groundwork from user-facing, tested function
 
 - [x] One-to-one conversation creation from username discovery.
 - [x] Private group and announcement-channel creation.
-- [x] Basic member discovery and owner/admin/member role storage.
+- [x] Member discovery, add/remove, owner/admin/moderator/member role management.
 - [x] Channel posting restricted to owners/admins by database policy.
 - [x] Invite links with expiry, revocation and use limits; redemption is JWT-verified through a Supabase Edge Function.
 - [ ] QR-code rendering for invite links.
-- [ ] Full role/permission management UI, member removal and ownership transfer.
+- [ ] Ownership transfer and granular per-action permissions.
 - [x] Topic labels and topic-scoped message creation.
 - [ ] Channel broadcast/subscription management.
 - [x] Pinned-message management and Saved Messages browsing.
