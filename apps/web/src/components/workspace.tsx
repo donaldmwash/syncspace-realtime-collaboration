@@ -458,7 +458,7 @@ export function Workspace() {
   async function createStatus(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!supabase || !user || !statusFile) { setNotice("Choose an image or video first."); return; }
-    if (!statusFile.type.startsWith("image/") && !statusFile.type.startsWith("video/")) { setNotice("Status updates must be images or videos."); return; }
+    if ((!statusFile.type.startsWith("image/") && !statusFile.type.startsWith("video/")) || statusFile.type === "image/svg+xml") { setNotice("Status updates must be raster images or videos."); return; }
     if (statusFile.size > 50 * 1024 * 1024) { setNotice("Status media must be 50 MB or smaller."); return; }
     const safeName = statusFile.name.replace(/[^\w.\-() ]/g, "_").slice(0, 100) || "status";
     const path = user.id + "/" + crypto.randomUUID() + "-" + safeName;
@@ -482,7 +482,7 @@ export function Workspace() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file || !supabase || !user) return;
-    if (!file.type.startsWith("image/")) { setNotice("Choose an image for your profile picture."); return; }
+    if (!file.type.startsWith("image/") || file.type === "image/svg+xml") { setNotice("Choose a raster image (PNG, JPG, WebP) for your profile picture."); return; }
     if (file.size > 5 * 1024 * 1024) { setNotice("Profile pictures must be 5 MB or smaller."); return; }
     const extension = file.name.split(".").pop()?.replace(/[^a-zA-Z0-9]/g, "") || "jpg";
     const path = user.id + "/" + crypto.randomUUID() + "." + extension;
@@ -766,6 +766,7 @@ export function Workspace() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file || !supabase || !user || !activeConversation) return;
+    if (/\\.(exe|dll|bat|cmd|ps1|sh|msi|apk|com|scr|vbs|js|html?|svg|jar)$/i.test(file.name) || file.type === "image/svg+xml") { setNotice("This potentially executable file type is blocked."); return; }
     if (file.size > 50 * 1024 * 1024) { setNotice("Files must be 50 MB or smaller."); return; }
     setUploading(true);
     const safeName = file.name.replace(/[^\w.\-() ]/g, "_").slice(0, 120) || "attachment";
