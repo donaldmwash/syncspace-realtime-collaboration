@@ -62,7 +62,7 @@ The realtime database, RLS policies, private conversation-files bucket and publi
 
 ## Deployment status
 
-The new web client is deployed to a Vercel preview from this feature branch for build validation. The production alias is still on the previous guest-chat implementation; do not direct participants to production as though this new authenticated version has been released. Production cutover requires successful multi-account testing and the Auth redirect allowlist above.
+The new web client is deployed to a Vercel preview from this feature branch for build validation. Preview deployments are protected by Vercel SSO and are not public participant links. The production alias is still on the previous guest-chat implementation; production Supabase environment variables are staged, but this branch has not been promoted; do not direct participants to production as though this new authenticated version has been released. Production cutover requires successful multi-account testing and the Auth redirect allowlist above.
 
 ## Security notes
 
