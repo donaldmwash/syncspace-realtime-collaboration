@@ -13,6 +13,7 @@ type ChatMessage = {
   senderId: string;
   text: string;
   createdAt: string;
+  editedAt?: string;
 };
 
 export function Workspace() {
@@ -23,6 +24,8 @@ export function Workspace() {
   const [participants, setParticipants] = useState(1);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
   const [notice, setNotice] = useState("Choose a display name to join the conversation.");
   const socketRef = useRef<Socket | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -60,6 +63,16 @@ export function Workspace() {
           : [...current, message].slice(-200),
       );
     });
+    socket.on("chat:message-updated", (message: ChatMessage) => {
+      setMessages((current) => current.map((item) => item.id === message.id ? message : item));
+    });
+    socket.on("chat:message-deleted", ({ id }: { id: string }) => {
+      setMessages((current) => current.filter((item) => item.id !== id));
+    });
+    socket.on("chat:messages-deleted", ({ ids }: { ids: string[] }) => {
+      const deleted = new Set(ids);
+      setMessages((current) => current.filter((item) => !deleted.has(item.id)));
+    });
     socket.on("presence:count", (count: number) => setParticipants(count));
 
     return () => {
@@ -91,6 +104,24 @@ export function Workspace() {
     if (!text || !socket?.connected) return;
     socket.emit("chat:send", { text });
     setDraft("");
+  }
+
+  function saveEdit(messageId: string) {
+    const text = editDraft.trim();
+    if (!text || !socketRef.current?.connected) return;
+    socketRef.current.emit("chat:edit", { id: messageId, text });
+    setEditingId(null);
+    setEditDraft("");
+  }
+
+  function deleteMessage(messageId: string) {
+    if (!window.confirm("Delete this message for everyone in the room?")) return;
+    socketRef.current?.emit("chat:delete", { id: messageId });
+  }
+
+  function clearMyMessages() {
+    if (!window.confirm("Delete all the messages you have written in this room for everyone?")) return;
+    socketRef.current?.emit("chat:clear-mine");
   }
 
   async function shareChat() {
@@ -145,6 +176,7 @@ export function Workspace() {
                 <div style={{ color: "#8294b1", fontSize: 12, marginTop: 4 }}>Signed in as {name} · {participants} participant{participants === 1 ? "" : "s"}</div>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={clearMyMessages} style={{ padding: "9px 12px", border: "1px solid #754b58", borderRadius: 9, background: "transparent", color: "#ffb6c2" }}>Clear my messages</button>
                 <button onClick={shareChat} style={{ padding: "9px 12px", border: "1px solid #354663", borderRadius: 9, background: "transparent", color: "#cbd8ec" }}>Share chat</button>
                 <button onClick={changeName} style={{ padding: "9px 12px", border: "1px solid #354663", borderRadius: 9, background: "transparent", color: "#cbd8ec" }}>Change name</button>
               </div>
@@ -159,13 +191,30 @@ export function Workspace() {
                 </div>
               ) : messages.map((message) => {
                 const mine = message.senderId === socketRef.current?.id;
+                const editing = editingId === message.id;
                 return (
                   <article key={message.id} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "min(78%, 600px)", minWidth: 120 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, margin: "0 4px 6px" }}>
                       <strong style={{ color: mine ? "#9db8ff" : "#8ce0b0", fontSize: 12 }}>{message.sender}{mine ? " (you)" : ""}</strong>
-                      <time style={{ color: "#7184a3", fontSize: 10 }}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
+                      <time style={{ color: "#7184a3", fontSize: 10 }}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{message.editedAt ? " · Edited" : ""}</time>
                     </div>
-                    <div style={{ background: mine ? "#20365c" : "#1a2940", color: "#e7eefb", borderRadius: 14, padding: "11px 14px", lineHeight: 1.6, fontSize: 14, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{message.text}</div>
+                    {editing ? (
+                      <div style={{ background: "#1a2940", borderRadius: 14, padding: 10 }}>
+                        <textarea value={editDraft} onChange={(event) => setEditDraft(event.target.value)} maxLength={2000} aria-label="Edit message" style={{ width: "100%", minHeight: 76, resize: "vertical", padding: 10, borderRadius: 8, border: "1px solid #354663", background: "#0d1727", color: "#e7eefb" }} />
+                        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
+                          <button type="button" onClick={() => { setEditingId(null); setEditDraft(""); }} style={{ padding: "6px 10px", border: "1px solid #536581", borderRadius: 7, background: "transparent", color: "#cbd8ec" }}>Cancel</button>
+                          <button type="button" onClick={() => saveEdit(message.id)} disabled={!editDraft.trim()} style={{ padding: "6px 10px", border: 0, borderRadius: 7, background: "#86a8ff", color: "#081020", fontWeight: 700 }}>Save edit</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ background: mine ? "#20365c" : "#1a2940", color: "#e7eefb", borderRadius: 14, padding: "11px 14px", lineHeight: 1.6, fontSize: 14, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{message.text}</div>
+                    )}
+                    {mine && !editing && (
+                      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, margin: "6px 4px 0" }}>
+                        <button type="button" onClick={() => { setEditingId(message.id); setEditDraft(message.text); }} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Edit</button>
+                        <button type="button" onClick={() => deleteMessage(message.id)} style={{ border: 0, background: "transparent", color: "#ff9eae", fontSize: 11, cursor: "pointer" }}>Delete</button>
+                      </div>
+                    )}
                   </article>
                 );
               })}
