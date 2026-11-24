@@ -1,318 +1,438 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
-import { io, type Socket } from "socket.io-client";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { User } from "@supabase/supabase-js";
+import { getSupabase } from "@/lib/supabase";
 
-const REALTIME_URL =
-  process.env.NEXT_PUBLIC_REALTIME_URL || "http://localhost:4000";
-const ROOM_ID = "public-demo";
-
-type ChatMessage = {
+type Conversation = {
   id: string;
-  sender: string;
-  senderId: string;
-  text: string;
-  createdAt: string;
-  editedAt?: string;
-  attachment?: { id: string; name: string; size: number; type: string };
-  replyTo?: { id: string; sender: string; text: string; attachmentName?: string };
+  type: "direct" | "group" | "channel";
+  title: string | null;
+  description?: string | null;
+  is_private: boolean;
+  is_announcement_only?: boolean;
+  last_message_at?: string | null;
+  role?: string;
+};
+type Attachment = { id: string; file_name: string; mime_type: string | null; size_bytes: number; object_path: string; signedUrl?: string };
+type Message = {
+  id: string;
+  conversation_id: string;
+  sender_id: string;
+  body: string | null;
+  message_type: string;
+  reply_to_id: string | null;
+  created_at: string;
+  edited_at: string | null;
+  deleted_at: string | null;
+  sender?: { display_name: string; avatar_url?: string | null };
+  attachments?: Attachment[];
+  reactions?: { emoji: string; user_id: string }[];
+  reply?: { body: string | null; sender?: { display_name: string } } | null;
 };
 
-export function Workspace() {
-  const [name, setName] = useState("");
-  const [nameInput, setNameInput] = useState("");
-  const [joined, setJoined] = useState(false);
-  const [connected, setConnected] = useState(false);
-  const [participants, setParticipants] = useState(1);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [draft, setDraft] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
-  const [notice, setNotice] = useState("Choose a display name to join the conversation.");
-  const socketRef = useRef<Socket | null>(null);
-  const authorIdRef = useRef("");
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+const LOUNGE_ID = "00000000-0000-4000-8000-000000000001";
+const panel: React.CSSProperties = { background: "#101a2b", border: "1px solid #26334b", borderRadius: 16 };
+const inputStyle: React.CSSProperties = { width: "100%", padding: "12px 14px", borderRadius: 9, border: "1px solid #354663", background: "#0a1220", color: "#e7eefb", outline: "none" };
+const primaryButton: React.CSSProperties = { padding: "11px 15px", border: 0, borderRadius: 9, background: "#86a8ff", color: "#081020", fontWeight: 700, cursor: "pointer" };
+const secondaryButton: React.CSSProperties = { padding: "9px 12px", border: "1px solid #354663", borderRadius: 9, background: "transparent", color: "#cbd8ec", cursor: "pointer" };
 
-  useEffect(() => {
-    const savedName = window.localStorage.getItem("syncspace-display-name");
-    if (savedName) setNameInput(savedName);
+export function Workspace() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signup");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [notice, setNotice] = useState("Create an account or sign in to start messaging.");
+  const [busy, setBusy] = useState(false);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeId, setActiveId] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [draft, setDraft] = useState("");
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [editingId, setEditingId] = useState("");
+  const [editDraft, setEditDraft] = useState("");
+  const [search, setSearch] = useState("");
+  const [newTitle, setNewTitle] = useState("");
+  const [newType, setNewType] = useState<"group" | "channel">("group");
+  const [memberQuery, setMemberQuery] = useState("");
+  const [memberResults, setMemberResults] = useState<any[]>([]);
+  const [showCreate, setShowCreate] = useState(false);
+  const [showMembers, setShowMembers] = useState(false);
+  const [onlineCount, setOnlineCount] = useState(0);
+  const [typingName, setTypingName] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [profileName, setProfileName] = useState("");
+  const [profileUsername, setProfileUsername] = useState("");
+  const [showProfile, setShowProfile] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const channelRef = useRef<any>(null);
+  const supabase = useMemo(() => {
+    try { return getSupabase(); } catch { return null; }
   }, []);
 
-  useEffect(() => {
-    if (!joined || !name) return;
+  const activeConversation = conversations.find((item) => item.id === activeId) ?? null;
 
-    let authorId = window.localStorage.getItem("syncspace-author-id");
-    if (!authorId) {
-      authorId = typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `member-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      window.localStorage.setItem("syncspace-author-id", authorId);
-    }
-    authorIdRef.current = authorId;
+  const loadConversations = useCallback(async (currentUser: User) => {
+    if (!supabase) return;
+    const { data, error } = await supabase
+      .from("conversation_members")
+      .select("conversation_id, role, conversations(id,type,title,description,is_private,is_announcement_only,last_message_at)")
+      .eq("user_id", currentUser.id);
+    if (error) { setNotice(error.message); return; }
+    const list = (data ?? []).map((row: any) => ({ ...row.conversations, role: row.role })).filter((item: any) => item?.id) as Conversation[];
+    list.sort((a, b) => {
+      if (a.id === LOUNGE_ID) return -1;
+      if (b.id === LOUNGE_ID) return 1;
+      return (b.last_message_at ?? "").localeCompare(a.last_message_at ?? "");
+    });
+    setConversations(list);
+    setActiveId((current) => list.some((item) => item.id === current) ? current : (list[0]?.id ?? ""));
+  }, [supabase]);
 
-    const socket = io(REALTIME_URL, {
-      transports: ["websocket"],
-      auth: { roomId: ROOM_ID, displayName: name, authorId },
-      reconnection: true,
-    });
-    socketRef.current = socket;
-
-    socket.on("connect", () => {
-      setConnected(true);
-      setNotice("You're connected. Say hello!");
-    });
-    socket.on("disconnect", () => {
-      setConnected(false);
-      setNotice("Connection lost. Reconnecting…");
-    });
-    socket.on("chat:history", (history: ChatMessage[]) => {
-      setMessages(Array.isArray(history) ? history : []);
-    });
-    socket.on("chat:message", (message: ChatMessage) => {
-      setMessages((current) =>
-        current.some((item) => item.id === message.id)
-          ? current
-          : [...current, message].slice(-200),
-      );
-    });
-    socket.on("chat:message-updated", (message: ChatMessage) => {
-      setMessages((current) => current.map((item) => item.id === message.id ? message : item));
-    });
-    socket.on("chat:message-deleted", ({ id }: { id: string }) => {
-      setMessages((current) => current.filter((item) => item.id !== id));
-    });
-    socket.on("chat:messages-deleted", ({ ids }: { ids: string[] }) => {
-      const deleted = new Set(ids);
-      setMessages((current) => current.filter((item) => !deleted.has(item.id)));
-    });
-    socket.on("chat:upload-error", (message: string) => { setUploading(false); setNotice(message); });
-    socket.on("presence:count", (count: number) => setParticipants(count));
-
-    return () => {
-      socket.disconnect();
-      socketRef.current = null;
-    };
-  }, [joined, name]);
+  const loadMessages = useCallback(async (conversationId: string) => {
+    if (!supabase || !conversationId) return;
+    const { data, error } = await supabase
+      .from("messages")
+      .select("id,conversation_id,sender_id,body,message_type,reply_to_id,created_at,edited_at,deleted_at,sender:profiles!messages_sender_id_fkey(display_name,avatar_url),attachments(id,file_name,mime_type,size_bytes,object_path),reactions:message_reactions(emoji,user_id),reply:messages!messages_reply_to_id_fkey(id,body,sender:profiles!messages_sender_id_fkey(display_name))")
+      .eq("conversation_id", conversationId)
+      .is("deleted_at", null)
+      .order("created_at", { ascending: true })
+      .limit(300);
+    if (error) { setNotice(error.message); return; }
+    const rows = (data ?? []) as any[];
+    const hydrated = await Promise.all(rows.map(async (row) => {
+      const attachments = await Promise.all((row.attachments ?? []).map(async (file: Attachment) => {
+        const { data: signed } = await supabase.storage.from("conversation-files").createSignedUrl(file.object_path, 3600);
+        return { ...file, signedUrl: signed?.signedUrl };
+      }));
+      return { ...row, sender: Array.isArray(row.sender) ? row.sender[0] : row.sender, reply: Array.isArray(row.reply) ? row.reply[0] : row.reply, attachments } as Message;
+    }));
+    setMessages(hydrated);
+  }, [supabase]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages]);
+    if (!supabase) { setNotice("Supabase is not configured. Add the two public Supabase environment variables to the web app."); setAuthReady(true); return; }
+    let alive = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!alive) return;
+      setUser(data.session?.user ?? null);
+      setAuthReady(true);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setAuthReady(true);
+    });
+    return () => { alive = false; listener.subscription.unsubscribe(); };
+  }, [supabase]);
 
-  function joinChat(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const cleanName = nameInput.trim().replace(/\s+/g, " ").slice(0, 32);
-    if (!cleanName) {
-      setNotice("Please enter the name you want other participants to see.");
+  useEffect(() => {
+    if (!user || !supabase) {
+      setConversations([]); setMessages([]); setActiveId("");
       return;
     }
-    window.localStorage.setItem("syncspace-display-name", cleanName);
-    setName(cleanName);
-    setJoined(true);
+    void (async () => {
+      const metaName = String(user.user_metadata?.display_name ?? "");
+      const cleanName = metaName || user.email?.split("@")[0] || "Member";
+      await supabase.from("profiles").upsert({ id: user.id, display_name: cleanName.slice(0, 60) }, { onConflict: "id", ignoreDuplicates: true });
+      const { data: profile } = await supabase.from("profiles").select("display_name,username").eq("id", user.id).maybeSingle();
+      setProfileName(profile?.display_name ?? cleanName);
+      setProfileUsername(profile?.username ?? "");
+      await loadConversations(user);
+    })();
+  }, [user, supabase, loadConversations]);
+
+  useEffect(() => {
+    if (!activeId || !supabase || !user) { setMessages([]); return; }
+    void loadMessages(activeId);
+    const channel = supabase.channel("conversation:" + activeId, {
+      config: { presence: { key: user.id } },
+    });
+    channel
+      .on("postgres_changes", { event: "*", schema: "public", table: "messages", filter: "conversation_id=eq." + activeId }, () => void loadMessages(activeId))
+      .on("postgres_changes", { event: "*", schema: "public", table: "message_reactions" }, () => void loadMessages(activeId))
+      .on("broadcast", { event: "typing" }, ({ payload }) => {
+        if (payload?.userId !== user.id) {
+          setTypingName(String(payload?.name ?? "Someone"));
+          if (typingTimer.current) clearTimeout(typingTimer.current);
+          typingTimer.current = setTimeout(() => setTypingName(""), 2200);
+        }
+      })
+      .on("presence", { event: "sync" }, () => {
+        const state = channel.presenceState();
+        setOnlineCount(Object.keys(state).length);
+      })
+      .subscribe(async (status) => {
+        if (status === "SUBSCRIBED") await channel.track({ userId: user.id, name: profileName || user.email, online_at: new Date().toISOString() });
+      });
+    channelRef.current = channel;
+    return () => { void supabase.removeChannel(channel); channelRef.current = null; };
+  }, [activeId, supabase, user, loadMessages, profileName]);
+
+  async function authenticate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase) return;
+    setBusy(true); setNotice("");
+    try {
+      if (authMode === "signup") {
+        const clean = displayName.trim().replace(/\s+/g, " ").slice(0, 60);
+        if (!clean) throw new Error("Enter the name other members will see.");
+        const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { display_name: clean } } });
+        if (error) throw error;
+        if (!data.session) setNotice("Account created. Check your email to confirm your address, then sign in.");
+        else setNotice("Your account is ready. Welcome to SyncSpace.");
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+        if (error) throw error;
+        setNotice("Signed in successfully.");
+      }
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Authentication failed."); }
+    finally { setBusy(false); }
   }
 
-  function sendMessage(event: FormEvent<HTMLFormElement>) {
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setNotice("You have signed out.");
+  }
+
+  async function createConversation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const text = draft.trim();
-    const socket = socketRef.current;
-    if (!text || !socket?.connected) return;
-    socket.emit("chat:send", { text, ...(replyingTo ? { replyToId: replyingTo.id } : {}) });
-    setDraft("");
-    setReplyingTo(null);
+    if (!supabase || !user) return;
+    const title = newTitle.trim().slice(0, 100);
+    if (!title) return;
+    setBusy(true);
+    const { data, error } = await supabase.from("conversations").insert({
+      type: newType, title, created_by: user.id, is_private: true,
+      is_announcement_only: newType === "channel",
+    }).select("id,type,title,description,is_private,is_announcement_only,last_message_at").single();
+    if (error) { setNotice(error.message); setBusy(false); return; }
+    const { error: memberError } = await supabase.from("conversation_members").insert({ conversation_id: data.id, user_id: user.id, role: "owner" });
+    if (memberError) { setNotice("The conversation was created, but membership setup failed: " + memberError.message); }
+    else {
+      setNewTitle(""); setShowCreate(false); setNotice(newType === "channel" ? "Channel created. Add members to invite your audience." : "Group created. Add members to invite your people.");
+      await loadConversations(user); setActiveId(data.id);
+    }
+    setBusy(false);
+  }
+
+  async function findMembers(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !memberQuery.trim()) return;
+    const query = memberQuery.trim().replace(/^@/, "");
+    const { data, error } = await supabase.from("profiles").select("id,username,display_name,avatar_url").neq("id", user?.id ?? "").ilike("username", query + "%").limit(10);
+    if (error) setNotice(error.message);
+    setMemberResults(data ?? []);
+    if (!data?.length) setNotice("No matching usernames found. Members need to set a username in their profile first.");
+  }
+
+  async function addMember(memberId: string) {
+    if (!supabase || !activeConversation) return;
+    const { error } = await supabase.from("conversation_members").insert({ conversation_id: activeConversation.id, user_id: memberId, role: "member" });
+    if (error) setNotice(error.code === "23505" ? "That person is already in this conversation." : error.message);
+    else setNotice("Member added to the conversation.");
+  }
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !user) return;
+    const cleanUsername = profileUsername.trim().replace(/^@/, "");
+    if (cleanUsername && !/^[A-Za-z0-9_]{3,24}$/.test(cleanUsername)) { setNotice("Username must be 3–24 characters using letters, numbers or underscores."); return; }
+    const { error } = await supabase.from("profiles").update({ display_name: profileName.trim().slice(0, 60), username: cleanUsername || null }).eq("id", user.id);
+    setNotice(error ? error.message : "Profile updated.");
+    setShowProfile(false);
+  }
+
+  async function sendMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !user || !activeConversation || !draft.trim()) return;
+    const body = draft.trim().slice(0, 20000);
+    const { error } = await supabase.from("messages").insert({
+      conversation_id: activeConversation.id, sender_id: user.id, body,
+      message_type: "text", reply_to_id: replyTo?.id ?? null,
+    });
+    if (error) { setNotice(error.message); return; }
+    setDraft(""); setReplyTo(null);
+    await supabase.from("conversations").update({ last_message_at: new Date().toISOString() }).eq("id", activeConversation.id);
+  }
+
+  async function editMessage(messageId: string) {
+    if (!supabase || !user || !editDraft.trim()) return;
+    const { error } = await supabase.from("messages").update({ body: editDraft.trim().slice(0, 20000), edited_at: new Date().toISOString() }).eq("id", messageId).eq("sender_id", user.id);
+    setNotice(error ? error.message : "Message updated.");
+    setEditingId(""); setEditDraft("");
+  }
+
+  async function deleteMessage(messageId: string) {
+    if (!supabase || !user || !window.confirm("Delete this message for everyone in this conversation?")) return;
+    const { error } = await supabase.from("messages").update({ deleted_at: new Date().toISOString(), body: "This message was deleted." }).eq("id", messageId).eq("sender_id", user.id);
+    if (error) setNotice(error.message);
+    else setNotice("Message deleted.");
+  }
+
+  async function toggleReaction(message: Message, emoji: string) {
+    if (!supabase || !user) return;
+    const exists = message.reactions?.some((item) => item.user_id === user.id && item.emoji === emoji);
+    const query = supabase.from("message_reactions");
+    const result = exists
+      ? await query.delete().eq("message_id", message.id).eq("user_id", user.id).eq("emoji", emoji)
+      : await query.insert({ message_id: message.id, user_id: user.id, emoji });
+    if (result.error) setNotice(result.error.message);
+    else await loadMessages(activeId);
+  }
+
+  async function pinMessage(message: Message) {
+    if (!supabase || !user || !activeConversation) return;
+    const { error } = await supabase.from("message_pins").upsert({ conversation_id: activeConversation.id, message_id: message.id, pinned_by: user.id });
+    setNotice(error ? error.message : "Message pinned.");
+  }
+
+  async function saveMessage(message: Message) {
+    if (!supabase || !user) return;
+    const { error } = await supabase.from("saved_messages").upsert({ user_id: user.id, message_id: message.id });
+    setNotice(error ? error.message : "Message saved to your Saved Messages.");
   }
 
   async function uploadFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
-    if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      setNotice("Files must be 5 MB or smaller.");
-      return;
-    }
-    const socket = socketRef.current;
-    if (!socket?.connected) {
-      setNotice("Reconnect to the chat before uploading.");
-      return;
-    }
+    if (!file || !supabase || !user || !activeConversation) return;
+    if (file.size > 50 * 1024 * 1024) { setNotice("Files must be 50 MB or smaller."); return; }
     setUploading(true);
-    setNotice(`Uploading ${file.name}…`);
-    try {
-      const data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read file"));
-        reader.onerror = () => reject(new Error("Could not read file"));
-        reader.readAsDataURL(file);
-      });
-      socket.emit("chat:upload", { name: file.name, type: file.type || "application/octet-stream", data });
-      setNotice("Attachment sent to the room.");
-    } catch {
-      setNotice("The file could not be uploaded. Please try again.");
-    } finally {
-      setUploading(false);
+    const safeName = file.name.replace(/[^\w.\-() ]/g, "_").slice(0, 120) || "attachment";
+    const path = activeConversation.id + "/" + user.id + "/" + crypto.randomUUID() + "-" + safeName;
+    const { error: uploadError } = await supabase.storage.from("conversation-files").upload(path, file, { contentType: file.type || "application/octet-stream", upsert: false });
+    if (uploadError) { setNotice(uploadError.message); setUploading(false); return; }
+    const type = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : file.type.startsWith("audio/") ? "audio" : "file";
+    const { data: message, error: messageError } = await supabase.from("messages").insert({
+      conversation_id: activeConversation.id, sender_id: user.id, body: file.name,
+      message_type: type, reply_to_id: replyTo?.id ?? null,
+    }).select("id").single();
+    if (messageError) {
+      await supabase.storage.from("conversation-files").remove([path]);
+      setNotice(messageError.message); setUploading(false); return;
     }
+    const { error: attachmentError } = await supabase.from("attachments").insert({
+      message_id: message.id, conversation_id: activeConversation.id, uploaded_by: user.id,
+      bucket_id: "conversation-files", object_path: path, file_name: file.name,
+      mime_type: file.type || "application/octet-stream", size_bytes: file.size,
+    });
+    if (attachmentError) setNotice("File uploaded, but attachment metadata failed: " + attachmentError.message);
+    else { setNotice("Attachment shared."); setReplyTo(null); await loadMessages(activeId); }
+    setUploading(false);
   }
 
-  function saveEdit(messageId: string) {
-    const text = editDraft.trim();
-    if (!text || !socketRef.current?.connected) return;
-    socketRef.current.emit("chat:edit", { id: messageId, text });
-    setEditingId(null);
-    setEditDraft("");
+  function notifyTyping(value: string) {
+    setDraft(value);
+    if (channelRef.current && user) void channelRef.current.send({ type: "broadcast", event: "typing", payload: { userId: user.id, name: profileName || "Someone" } });
   }
 
-  function deleteMessage(messageId: string) {
-    if (!window.confirm("Delete this message for everyone in the room?")) return;
-    socketRef.current?.emit("chat:delete", { id: messageId });
-  }
+  const visibleMessages = messages.filter((message) => !search.trim() || (message.body ?? "").toLowerCase().includes(search.toLowerCase()));
 
-  function clearMyMessages() {
-    if (!window.confirm("Delete all the messages you have written in this room for everyone?")) return;
-    socketRef.current?.emit("chat:clear-mine");
-  }
+  if (!authReady) return <main style={{ minHeight: "100vh", display: "grid", placeItems: "center", color: "#cbd8ec" }}>Loading SyncSpace…</main>;
 
-  async function shareChat() {
-    try {
-      await navigator.clipboard.writeText(window.location.href);
-      setNotice("Chat link copied. Send it to your friends.");
-    } catch {
-      setNotice("Copy this page's URL and send it to your friends.");
-    }
-  }
-
-  function changeName() {
-    socketRef.current?.disconnect();
-    setJoined(false);
-    setConnected(false);
-    setMessages([]);
-    setReplyingTo(null);
-    setName("");
-    setNotice("Choose a display name to join the conversation.");
-  }
+  if (!user) return (
+    <main style={{ minHeight: "100vh", padding: "40px 16px", display: "grid", placeItems: "center" }}>
+      <section style={{ ...panel, width: "min(100%, 460px)", padding: 30 }}>
+        <div style={{ color: "#8ea7d7", fontSize: 12, letterSpacing: 3 }}>SYNCSPACE</div>
+        <h1 style={{ fontSize: 30, margin: "10px 0" }}>Your conversations, together.</h1>
+        <p style={{ color: "#a8b6ce", lineHeight: 1.6 }}>Create an account to join the community, start private groups and keep your messages across devices.</p>
+        <div style={{ display: "flex", gap: 8, margin: "22px 0" }}>
+          <button onClick={() => setAuthMode("signup")} style={{ ...secondaryButton, flex: 1, background: authMode === "signup" ? "#20365c" : "transparent" }}>Create account</button>
+          <button onClick={() => setAuthMode("signin")} style={{ ...secondaryButton, flex: 1, background: authMode === "signin" ? "#20365c" : "transparent" }}>Sign in</button>
+        </div>
+        <form onSubmit={authenticate} style={{ display: "grid", gap: 12 }}>
+          {authMode === "signup" && <label style={{ color: "#cbd8ec", fontSize: 13 }}>Display name<input value={displayName} onChange={(e) => setDisplayName(e.target.value)} required maxLength={60} placeholder="Your name" style={{ ...inputStyle, marginTop: 7 }} /></label>}
+          <label style={{ color: "#cbd8ec", fontSize: 13 }}>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" placeholder="you@example.com" style={{ ...inputStyle, marginTop: 7 }} /></label>
+          <label style={{ color: "#cbd8ec", fontSize: 13 }}>Password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} autoComplete={authMode === "signup" ? "new-password" : "current-password"} placeholder="At least 8 characters" style={{ ...inputStyle, marginTop: 7 }} /></label>
+          <button type="submit" disabled={busy} style={{ ...primaryButton, marginTop: 6 }}>{busy ? "Please wait…" : authMode === "signup" ? "Create my account" : "Sign in"}</button>
+        </form>
+        <p role="status" style={{ color: "#9eb0cb", fontSize: 13, lineHeight: 1.6, marginTop: 18 }}>{notice}</p>
+        <p style={{ color: "#7184a3", fontSize: 11 }}>Use a real email address. If email confirmation is enabled, verify your address before signing in.</p>
+      </section>
+    </main>
+  );
 
   return (
-    <main style={{ minHeight: "100vh", padding: "32px 16px 48px" }}>
-      <div style={{ maxWidth: 900, margin: "0 auto" }}>
-        <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
-          <div>
-            <div style={{ color: "#8ea7d7", fontSize: 12, letterSpacing: 3 }}>SYNCSPACE COMMUNITY</div>
-            <h1 style={{ fontSize: 30, margin: "8px 0 4px" }}>The conversation room</h1>
-            <p style={{ color: "#91a2bd", margin: 0, fontSize: 14 }}>A place for you and your friends to chat in real time.</p>
+    <main style={{ minHeight: "100vh", padding: 16, color: "#e7eefb" }}>
+      <div style={{ maxWidth: 1400, minHeight: "calc(100vh - 32px)", margin: "0 auto", display: "grid", gridTemplateColumns: "minmax(250px, 320px) minmax(0, 1fr)", gap: 14 }}>
+        <aside style={{ ...panel, padding: 18, display: "flex", flexDirection: "column", minHeight: 600 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div><div style={{ color: "#8ea7d7", fontSize: 11, letterSpacing: 3 }}>SYNCSPACE</div><h1 style={{ fontSize: 24, margin: "7px 0 0" }}>Messages</h1></div>
+            <button onClick={() => setShowCreate(true)} title="New group or channel" style={{ ...primaryButton, fontSize: 20, padding: "5px 12px" }}>＋</button>
           </div>
-          <div role="status" style={{ border: "1px solid #26334b", borderRadius: 30, padding: "10px 14px", color: connected ? "#8ce0b0" : "#f3c77a", fontSize: 13 }}>
-            ● {joined ? (connected ? "Online" : "Connecting…") : "Not joined"} · {participants} here
+          <div style={{ display: "flex", gap: 8, margin: "18px 0" }}>
+            <button onClick={() => setShowProfile(true)} style={{ ...secondaryButton, flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}> {profileName || user.email} </button>
+            <button onClick={signOut} style={secondaryButton}>Sign out</button>
           </div>
-        </header>
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search messages…" style={{ ...inputStyle, marginBottom: 12 }} />
+          <div style={{ color: "#7184a3", fontSize: 11, letterSpacing: 1.5, margin: "8px 0" }}>YOUR CONVERSATIONS</div>
+          <div style={{ display: "grid", gap: 7, overflowY: "auto" }}>
+            {conversations.map((conversation) => (
+              <button key={conversation.id} onClick={() => setActiveId(conversation.id)} style={{ textAlign: "left", padding: 12, borderRadius: 10, border: "1px solid " + (activeId === conversation.id ? "#6386d4" : "#26334b"), background: activeId === conversation.id ? "#1b2d4b" : "transparent", color: "#e7eefb", cursor: "pointer" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7 }}><span>{conversation.type === "channel" ? "📢" : conversation.id === LOUNGE_ID ? "🌐" : "👥"}</span><strong style={{ fontSize: 13 }}>{conversation.title || "Direct message"}</strong></div>
+                <div style={{ color: "#8193b1", fontSize: 11, marginTop: 5 }}>{conversation.id === LOUNGE_ID ? "Public community" : conversation.type === "channel" ? "Channel" : "Private group"} · {conversation.role}</div>
+              </button>
+            ))}
+            {!conversations.length && <p style={{ color: "#8193b1", fontSize: 13 }}>No conversations yet. Create a group to begin.</p>}
+          </div>
+          <div style={{ marginTop: "auto", paddingTop: 18, color: "#7184a3", fontSize: 11, lineHeight: 1.6 }}>Persistent accounts · private file storage · realtime updates</div>
+        </aside>
 
-        {!joined ? (
-          <section style={{ maxWidth: 480, margin: "70px auto", background: "#101a2b", border: "1px solid #26334b", borderRadius: 20, padding: 28 }}>
-            <div style={{ fontSize: 12, color: "#8ea7d7", letterSpacing: 2 }}>JOIN THE CHAT</div>
-            <h2 style={{ fontSize: 24, margin: "12px 0" }}>What should we call you?</h2>
-            <p style={{ color: "#a8b6ce", fontSize: 14, lineHeight: 1.7 }}>Your display name will appear above every message you send, so everyone knows who is speaking.</p>
-            <form onSubmit={joinChat}>
-              <label htmlFor="display-name" style={{ display: "block", color: "#c4d0e4", fontSize: 13, marginBottom: 8 }}>Your name</label>
-              <input id="display-name" value={nameInput} onChange={(event) => setNameInput(event.target.value)} maxLength={32} placeholder="e.g. Donald" autoComplete="nickname" required style={{ width: "100%", padding: 14, borderRadius: 10, border: "1px solid #354663", background: "#0a1220", color: "#e7eefb", outline: "none" }} />
-              <button type="submit" style={{ width: "100%", marginTop: 14, padding: 14, border: 0, borderRadius: 10, background: "#86a8ff", color: "#081020", fontWeight: 700 }}>Enter chat</button>
-            </form>
-            <p style={{ color: "#8294b1", fontSize: 12, marginTop: 16 }}>{notice}</p>
-          </section>
-        ) : (
-          <section style={{ background: "#101a2b", border: "1px solid #26334b", borderRadius: 20, overflow: "hidden" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "16px 20px", borderBottom: "1px solid #26334b", flexWrap: "wrap" }}>
-              <div>
-                <strong style={{ color: "#e7eefb" }}>Community chat</strong>
-                <div style={{ color: "#8294b1", fontSize: 12, marginTop: 4 }}>Signed in as {name} · {participants} participant{participants === 1 ? "" : "s"}</div>
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={clearMyMessages} style={{ padding: "9px 12px", border: "1px solid #754b58", borderRadius: 9, background: "transparent", color: "#ffb6c2" }}>Clear my messages</button>
-                <button onClick={shareChat} style={{ padding: "9px 12px", border: "1px solid #354663", borderRadius: 9, background: "transparent", color: "#cbd8ec" }}>Share chat</button>
-                <button onClick={changeName} style={{ padding: "9px 12px", border: "1px solid #354663", borderRadius: 9, background: "transparent", color: "#cbd8ec" }}>Change name</button>
-              </div>
-            </div>
-
-            <div aria-live="polite" style={{ height: "min(62vh, 620px)", minHeight: 360, overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
-              {messages.length === 0 ? (
-                <div style={{ margin: "auto", textAlign: "center", color: "#8294b1", maxWidth: 300 }}>
-                  <div style={{ fontSize: 30, marginBottom: 10 }}>💬</div>
-                  <strong style={{ color: "#dbe6f8" }}>The room is open</strong>
-                  <p style={{ fontSize: 13, lineHeight: 1.6 }}>Send the first message and start the conversation.</p>
-                </div>
-              ) : messages.map((message) => {
-                const mine = message.senderId === authorIdRef.current;
-                const editing = editingId === message.id;
-                return (
-                  <article key={message.id} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "min(78%, 600px)", minWidth: 120 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, margin: "0 4px 6px" }}>
-                      <strong style={{ color: mine ? "#9db8ff" : "#8ce0b0", fontSize: 12 }}>{message.sender}{mine ? " (you)" : ""}</strong>
-                      <time style={{ color: "#7184a3", fontSize: 10 }}>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{message.editedAt ? " · Edited" : ""}</time>
-                    </div>
-                    {message.replyTo && (
-                      <div style={{ borderLeft: "3px solid #86a8ff", background: "#111f34", borderRadius: "8px 8px 0 0", padding: "8px 11px", marginBottom: 5, color: "#aebfda", fontSize: 11 }}>
-                        <strong style={{ display: "block", color: "#9db8ff", marginBottom: 3 }}>Replying to {message.replyTo.sender}</strong>
-                        <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{message.replyTo.attachmentName ? `📎 ${message.replyTo.attachmentName}` : message.replyTo.text}</span>
-                      </div>
-                    )}
-                    {editing ? (
-                      <div style={{ background: "#1a2940", borderRadius: 14, padding: 10 }}>
-                        <textarea value={editDraft} onChange={(event) => setEditDraft(event.target.value)} maxLength={2000} aria-label="Edit message" style={{ width: "100%", minHeight: 76, resize: "vertical", padding: 10, borderRadius: 8, border: "1px solid #354663", background: "#0d1727", color: "#e7eefb" }} />
-                        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
-                          <button type="button" onClick={() => { setEditingId(null); setEditDraft(""); }} style={{ padding: "6px 10px", border: "1px solid #536581", borderRadius: 7, background: "transparent", color: "#cbd8ec" }}>Cancel</button>
-                          <button type="button" onClick={() => saveEdit(message.id)} disabled={!editDraft.trim()} style={{ padding: "6px 10px", border: 0, borderRadius: 7, background: "#86a8ff", color: "#081020", fontWeight: 700 }}>Save edit</button>
-                        </div>
-                      </div>
-                    ) : message.attachment ? (
-                      <div style={{ background: mine ? "#20365c" : "#1a2940", color: "#e7eefb", borderRadius: 14, padding: 12, maxWidth: 360 }}>
-                        {message.attachment.type.startsWith("image/") ? (
-                          <a href={`${REALTIME_URL}/files/${message.attachment.id}`} target="_blank" rel="noreferrer">
-                            <img src={`${REALTIME_URL}/files/${message.attachment.id}`} alt={message.attachment.name} style={{ display: "block", maxWidth: "100%", maxHeight: 260, objectFit: "contain", borderRadius: 9, marginBottom: 9 }} />
-                          </a>
-                        ) : null}
-                        <a href={`${REALTIME_URL}/files/${message.attachment.id}`} target="_blank" rel="noreferrer" style={{ color: "#c8d8ff", display: "block", overflowWrap: "anywhere", fontSize: 13, textDecoration: "underline" }}>
-                          📎 {message.attachment.name}
-                        </a>
-                        <div style={{ color: "#9eafca", fontSize: 11, marginTop: 5 }}>{(message.attachment.size / 1024).toFixed(1)} KB · {message.attachment.type || "File"}</div>
-                      </div>
-                    ) : (
-                      <div style={{ background: mine ? "#20365c" : "#1a2940", color: "#e7eefb", borderRadius: 14, padding: "11px 14px", lineHeight: 1.6, fontSize: 14, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{message.text}</div>
-                    )}
-                    {!editing && (
-                      <div style={{ display: "flex", justifyContent: mine ? "flex-end" : "flex-start", gap: 10, margin: "6px 4px 0" }}>
-                        <button type="button" onClick={() => { setReplyingTo(message); setNotice(`Replying to ${message.sender}`); }} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>↩ Reply</button>
-                      </div>
-                    )}
-                    {mine && !editing && (
-                      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, margin: "6px 4px 0" }}>
-                        {!message.attachment && <button type="button" onClick={() => { setEditingId(message.id); setEditDraft(message.text); }} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Edit</button> }
-                        <button type="button" onClick={() => deleteMessage(message.id)} style={{ border: 0, background: "transparent", color: "#ff9eae", fontSize: 11, cursor: "pointer" }}>Delete</button>
-                      </div>
-                    )}
-                  </article>
-                );
+        <section style={{ ...panel, display: "flex", flexDirection: "column", minHeight: 600, overflow: "hidden" }}>
+          {activeConversation ? <>
+            <header style={{ padding: "17px 20px", borderBottom: "1px solid #26334b", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div><strong style={{ fontSize: 17 }}>{activeConversation.title || "Conversation"}</strong><div style={{ color: "#8193b1", fontSize: 12, marginTop: 4 }}>{activeConversation.is_private ? "Private conversation" : "Public community"} · {onlineCount} online{activeConversation.is_announcement_only ? " · Announcements" : ""}</div></div>
+              <div style={{ display: "flex", gap: 8 }}><button onClick={() => setShowMembers(true)} style={secondaryButton}>Members / invite</button></div>
+            </header>
+            <div aria-live="polite" style={{ flex: 1, minHeight: 400, maxHeight: "calc(100vh - 230px)", overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+              {visibleMessages.map((message) => {
+                const mine = message.sender_id === user.id;
+                const file = message.attachments?.[0];
+                const reply = Array.isArray(message.reply) ? message.reply[0] : message.reply;
+                return <article key={message.id} style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "min(82%, 720px)", minWidth: 130 }}>
+                  <div style={{ color: mine ? "#9db8ff" : "#8ce0b0", fontSize: 11, margin: "0 5px 5px" }}>{mine ? "You" : message.sender?.display_name || "Member"} · {new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{message.edited_at ? " · Edited" : ""}</div>
+                  {reply && <div style={{ padding: "7px 10px", borderLeft: "3px solid #86a8ff", background: "#111f34", borderRadius: 7, color: "#aebfda", fontSize: 11, marginBottom: 4 }}>Replying to {reply.sender?.display_name || "member"}: {(reply.body || "Attachment").slice(0, 120)}</div>}
+                  {editingId === message.id ? <div style={{ ...panel, padding: 9 }}><textarea value={editDraft} onChange={(e) => setEditDraft(e.target.value)} style={{ ...inputStyle, minHeight: 80 }} /><div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}><button onClick={() => setEditingId("")} style={secondaryButton}>Cancel</button><button onClick={() => void editMessage(message.id)} style={primaryButton}>Save</button></div></div> : <div style={{ background: mine ? "#20365c" : "#1a2940", borderRadius: 13, padding: "11px 14px", lineHeight: 1.6, overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>
+                    {file ? <div style={{ display: "grid", gap: 7 }}>
+                      {file.mime_type?.startsWith("image/") && file.signedUrl && <a href={file.signedUrl} target="_blank" rel="noreferrer"><img src={file.signedUrl} alt={file.file_name} style={{ maxWidth: "100%", maxHeight: 300, borderRadius: 8 }} /></a>}
+                      {file.mime_type?.startsWith("video/") && file.signedUrl && <video src={file.signedUrl} controls style={{ maxWidth: "100%", maxHeight: 320 }} />}
+                      {file.mime_type?.startsWith("audio/") && file.signedUrl && <audio src={file.signedUrl} controls />}
+                      <a href={file.signedUrl} target="_blank" rel="noreferrer" style={{ color: "#c8d8ff" }}>📎 {file.file_name}</a><small style={{ color: "#aebfda" }}>{(file.size_bytes / 1024 / 1024).toFixed(2)} MB</small>
+                    </div> : message.body}</div>}
+                  <div style={{ display: "flex", gap: 9, flexWrap: "wrap", margin: "6px 4px 0", alignItems: "center" }}>
+                    {["👍","❤️","😂"].map((emoji) => <button key={emoji} onClick={() => void toggleReaction(message, emoji)} style={{ ...secondaryButton, padding: "3px 7px", fontSize: 11, borderColor: message.reactions?.some((r) => r.emoji === emoji && r.user_id === user.id) ? "#86a8ff" : "#354663" }}>{emoji} {message.reactions?.filter((r) => r.emoji === emoji).length || ""}</button>)}
+                    <button onClick={() => setReplyTo(message)} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>↩ Reply</button>
+                    <button onClick={() => void saveMessage(message)} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Save</button>
+                    <button onClick={() => void pinMessage(message)} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Pin</button>
+                    {mine && <><button onClick={() => { setEditingId(message.id); setEditDraft(message.body ?? ""); }} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Edit</button><button onClick={() => void deleteMessage(message.id)} style={{ border: 0, background: "transparent", color: "#ff9eae", fontSize: 11, cursor: "pointer" }}>Delete</button></>}
+                  </div>
+                </article>;
               })}
-              <div ref={bottomRef} />
+              {!visibleMessages.length && <div style={{ margin: "auto", color: "#8193b1", textAlign: "center" }}>{search ? "No messages match your search." : "No messages yet. Start the conversation."}</div>}
+              {typingName && <div style={{ color: "#9db8ff", fontSize: 12 }}>{typingName} is typing…</div>}
             </div>
-
-            {replyingTo && (
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 16px", background: "#14233a", borderTop: "1px solid #26334b" }}>
-                <div style={{ minWidth: 0, borderLeft: "3px solid #86a8ff", paddingLeft: 10 }}>
-                  <strong style={{ display: "block", color: "#9db8ff", fontSize: 12 }}>Replying to {replyingTo.sender}</strong>
-                  <span style={{ display: "block", color: "#aebfda", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{replyingTo.attachment ? `📎 ${replyingTo.attachment.name}` : replyingTo.text}</span>
-                </div>
-                <button type="button" onClick={() => setReplyingTo(null)} aria-label="Cancel reply" style={{ border: 0, background: "transparent", color: "#cbd8ec", fontSize: 18, cursor: "pointer" }}>×</button>
-              </div>
-            )}
-            <form onSubmit={sendMessage} style={{ display: "flex", gap: 10, padding: 16, borderTop: "1px solid #26334b", background: "#0d1727", alignItems: "center" }}>
-              <input ref={fileInputRef} type="file" onChange={uploadFile} disabled={!connected || uploading} style={{ display: "none" }} aria-label="Choose an attachment" />
-              <button type="button" onClick={() => fileInputRef.current?.click()} disabled={!connected || uploading} title="Attach a file (5 MB maximum)" style={{ padding: "0 14px", minHeight: 46, border: "1px solid #354663", borderRadius: 10, background: "#17243a", color: "#cbd8ec", fontSize: 20, cursor: "pointer" }}>{uploading ? "…" : "＋"}</button>
-              <input value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={2000} placeholder={connected ? "Write a message…" : "Reconnecting…"} disabled={!connected} aria-label="Message" style={{ flex: 1, minWidth: 0, padding: 14, borderRadius: 10, border: "1px solid #354663", background: "#101a2b", color: "#e7eefb", outline: "none" }} />
-              <button type="submit" disabled={!connected || !draft.trim()} style={{ padding: "0 20px", border: 0, borderRadius: 10, background: connected && draft.trim() ? "#86a8ff" : "#465675", color: "#081020", fontWeight: 700 }}>Send</button>
+            {replyTo && <div style={{ padding: "9px 16px", background: "#14233a", borderTop: "1px solid #26334b", display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: 12, color: "#aebfda" }}>Replying to {replyTo.sender?.display_name || "member"}: {(replyTo.body || "Attachment").slice(0, 90)}</span><button onClick={() => setReplyTo(null)} style={{ ...secondaryButton, padding: "2px 8px" }}>×</button></div>}
+            <form onSubmit={sendMessage} style={{ padding: 14, borderTop: "1px solid #26334b", display: "flex", gap: 9, alignItems: "center" }}>
+              <input ref={fileRef} type="file" onChange={uploadFile} disabled={uploading} style={{ display: "none" }} />
+              <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading} style={{ ...secondaryButton, fontSize: 19 }}>{uploading ? "…" : "＋"}</button>
+              <input value={draft} onChange={(e) => notifyTyping(e.target.value)} placeholder={activeConversation.is_announcement_only && activeConversation.role === "member" ? "Only admins can post here" : "Write a message…"} disabled={activeConversation.is_announcement_only && !["owner","admin"].includes(activeConversation.role ?? "")} style={{ ...inputStyle, flex: 1 }} />
+              <button type="submit" disabled={!draft.trim() || (activeConversation.is_announcement_only && !["owner","admin"].includes(activeConversation.role ?? ""))} style={primaryButton}>Send</button>
             </form>
-            <div style={{ padding: "0 18px 12px", color: "#7184a3", fontSize: 11 }}>{notice} · Messages and attachments are currently kept in temporary server memory. Attachments: up to 5 MB each.</div>
-          </section>
-        )}
-        <footer style={{ color: "#657895", fontSize: 12, marginTop: 20, textAlign: "center" }}>SYNCSPACE · Community chat · Room: {ROOM_ID}</footer>
+          </> : <div style={{ margin: "auto", color: "#8193b1", textAlign: "center", padding: 30 }}>Choose a conversation or create a group to get started.</div>}
+          <div role="status" style={{ padding: "0 16px 10px", color: "#7184a3", fontSize: 11 }}>{notice}</div>
+        </section>
       </div>
+
+      {showCreate && <div style={modalStyle}><form onSubmit={createConversation} style={{ ...panel, width: "min(100%, 440px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Create a conversation</h2><div style={{ display: "flex", gap: 8 }}><button type="button" onClick={() => setNewType("group")} style={{ ...secondaryButton, flex: 1, background: newType === "group" ? "#20365c" : "transparent" }}>Group</button><button type="button" onClick={() => setNewType("channel")} style={{ ...secondaryButton, flex: 1, background: newType === "channel" ? "#20365c" : "transparent" }}>Channel</button></div><input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder={newType === "group" ? "Group name" : "Channel name"} maxLength={100} required style={inputStyle} /><p style={{ color: "#8193b1", fontSize: 12 }}>{newType === "channel" ? "Channels are announcement-first spaces. Only owners and admins can post." : "Groups are private. Add people by their SyncSpace username after creation."}</p><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowCreate(false)} style={secondaryButton}>Cancel</button><button disabled={busy} style={primaryButton}>Create</button></div></form></div>}
+
+      {showMembers && activeConversation && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 480px)", padding: 22 }}><h2 style={{ marginTop: 0 }}>Add members</h2><p style={{ color: "#8193b1", fontSize: 13 }}>Search by exact or partial username. People must set a username in their profile to be found.</p><form onSubmit={findMembers} style={{ display: "flex", gap: 8 }}><input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="@username" style={inputStyle} /><button style={primaryButton}>Find</button></form><div style={{ display: "grid", gap: 8, marginTop: 14 }}>{memberResults.map((member) => <div key={member.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 10, background: "#14233a", borderRadius: 8 }}><span>{member.display_name} <small style={{ color: "#8193b1" }}>@{member.username}</small></span><button onClick={() => void addMember(member.id)} style={secondaryButton}>Add</button></div>)}</div><button onClick={() => setShowMembers(false)} style={{ ...secondaryButton, width: "100%", marginTop: 14 }}>Close</button></section></div>}
+
+      {showProfile && <div style={modalStyle}><form onSubmit={saveProfile} style={{ ...panel, width: "min(100%, 440px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Your profile</h2><label style={{ color: "#cbd8ec", fontSize: 13 }}>Display name<input value={profileName} onChange={(e) => setProfileName(e.target.value)} maxLength={60} required style={{ ...inputStyle, marginTop: 6 }} /></label><label style={{ color: "#cbd8ec", fontSize: 13 }}>Username<input value={profileUsername} onChange={(e) => setProfileUsername(e.target.value)} maxLength={24} placeholder="your_username" style={{ ...inputStyle, marginTop: 6 }} /></label><small style={{ color: "#8193b1" }}>Username must be unique and 3–24 letters, numbers or underscores. Email: {user.email}</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowProfile(false)} style={secondaryButton}>Cancel</button><button style={primaryButton}>Save profile</button></div></form></div>}
     </main>
   );
 }
+
+const modalStyle: React.CSSProperties = { position: "fixed", inset: 0, zIndex: 50, background: "rgba(2,8,18,.78)", display: "grid", placeItems: "center", padding: 16 };
