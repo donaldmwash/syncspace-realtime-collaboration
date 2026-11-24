@@ -576,15 +576,35 @@ export function Workspace() {
     if (!supabase || !user) return;
     const original = messages.find((item) => item.id === forwardMessageId);
     if (!original) return;
-    if (!original.body || original.attachments?.length) {
-      setNotice("Forwarding text messages is supported. Forwarding attachments will be added in a later pass.");
-      return;
+    const sourceFile = original.attachments?.[0];
+    let copiedPath = "";
+    if (sourceFile) {
+      const safeName = sourceFile.file_name.replace(/[^\\w.\\-() ]/g, "_").slice(0, 120) || "forwarded-file";
+      copiedPath = targetId + "/" + user.id + "/" + crypto.randomUUID() + "-" + safeName;
+      const { error: copyError } = await supabase.storage.from("conversation-files").copy(sourceFile.object_path, copiedPath);
+      if (copyError) { setNotice(copyError.message); return; }
     }
-    const { error } = await supabase.from("messages").insert({
-      conversation_id: targetId, sender_id: user.id, body: original.body,
+    if (!original.body && !sourceFile) { setNotice("This message cannot be forwarded."); return; }
+    const { data: forwarded, error } = await supabase.from("messages").insert({
+      conversation_id: targetId, sender_id: user.id, body: original.body || sourceFile?.file_name || "",
       message_type: original.message_type, forwarded_from_id: original.id,
-    });
-    if (error) { setNotice(error.message); return; }
+    }).select("id").single();
+    if (error) {
+      if (copiedPath) await supabase.storage.from("conversation-files").remove([copiedPath]);
+      setNotice(error.message); return;
+    }
+    if (sourceFile) {
+      const { error: attachmentError } = await supabase.from("attachments").insert({
+        message_id: forwarded.id, conversation_id: targetId, uploaded_by: user.id,
+        bucket_id: "conversation-files", object_path: copiedPath,
+        file_name: sourceFile.file_name, mime_type: sourceFile.mime_type, size_bytes: sourceFile.size_bytes,
+      });
+      if (attachmentError) {
+        await supabase.storage.from("conversation-files").remove([copiedPath]);
+        await supabase.from("messages").delete().eq("id", forwarded.id).eq("sender_id", user.id);
+        setNotice(attachmentError.message); return;
+      }
+    }
     setForwardMessageId("");
     await loadConversations(user);
     setActiveId(targetId);
