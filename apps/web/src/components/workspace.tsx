@@ -14,6 +14,7 @@ type ChatMessage = {
   text: string;
   createdAt: string;
   editedAt?: string;
+  attachment?: { id: string; name: string; size: number; type: string };
 };
 
 export function Workspace() {
@@ -26,10 +27,12 @@ export function Workspace() {
   const [draft, setDraft] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  const [uploading, setUploading] = useState(false);
   const [notice, setNotice] = useState("Choose a display name to join the conversation.");
   const socketRef = useRef<Socket | null>(null);
   const authorIdRef = useRef("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const savedName = window.localStorage.getItem("syncspace-display-name");
@@ -83,6 +86,7 @@ export function Workspace() {
       const deleted = new Set(ids);
       setMessages((current) => current.filter((item) => !deleted.has(item.id)));
     });
+    socket.on("chat:upload-error", (message: string) => { setUploading(false); setNotice(message); });
     socket.on("presence:count", (count: number) => setParticipants(count));
 
     return () => {
@@ -114,6 +118,37 @@ export function Workspace() {
     if (!text || !socket?.connected) return;
     socket.emit("chat:send", { text });
     setDraft("");
+  }
+
+  async function uploadFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setNotice("Files must be 5 MB or smaller.");
+      return;
+    }
+    const socket = socketRef.current;
+    if (!socket?.connected) {
+      setNotice("Reconnect to the chat before uploading.");
+      return;
+    }
+    setUploading(true);
+    setNotice(`Uploading ${file.name}…`);
+    try {
+      const data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read file"));
+        reader.onerror = () => reject(new Error("Could not read file"));
+        reader.readAsDataURL(file);
+      });
+      socket.emit("chat:upload", { name: file.name, type: file.type || "application/octet-stream", data });
+      setNotice("Attachment sent to the room.");
+    } catch {
+      setNotice("The file could not be uploaded. Please try again.");
+    } finally {
+      setUploading(false);
+    }
   }
 
   function saveEdit(messageId: string) {
@@ -216,12 +251,24 @@ export function Workspace() {
                           <button type="button" onClick={() => saveEdit(message.id)} disabled={!editDraft.trim()} style={{ padding: "6px 10px", border: 0, borderRadius: 7, background: "#86a8ff", color: "#081020", fontWeight: 700 }}>Save edit</button>
                         </div>
                       </div>
+                    ) : message.attachment ? (
+                      <div style={{ background: mine ? "#20365c" : "#1a2940", color: "#e7eefb", borderRadius: 14, padding: 12, maxWidth: 360 }}>
+                        {message.attachment.type.startsWith("image/") ? (
+                          <a href={`${REALTIME_URL}/files/${message.attachment.id}`} target="_blank" rel="noreferrer">
+                            <img src={`${REALTIME_URL}/files/${message.attachment.id}`} alt={message.attachment.name} style={{ display: "block", maxWidth: "100%", maxHeight: 260, objectFit: "contain", borderRadius: 9, marginBottom: 9 }} />
+                          </a>
+                        ) : null}
+                        <a href={`${REALTIME_URL}/files/${message.attachment.id}`} target="_blank" rel="noreferrer" style={{ color: "#c8d8ff", display: "block", overflowWrap: "anywhere", fontSize: 13, textDecoration: "underline" }}>
+                          📎 {message.attachment.name}
+                        </a>
+                        <div style={{ color: "#9eafca", fontSize: 11, marginTop: 5 }}>{(message.attachment.size / 1024).toFixed(1)} KB · {message.attachment.type || "File"}</div>
+                      </div>
                     ) : (
                       <div style={{ background: mine ? "#20365c" : "#1a2940", color: "#e7eefb", borderRadius: 14, padding: "11px 14px", lineHeight: 1.6, fontSize: 14, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{message.text}</div>
                     )}
                     {mine && !editing && (
                       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, margin: "6px 4px 0" }}>
-                        <button type="button" onClick={() => { setEditingId(message.id); setEditDraft(message.text); }} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Edit</button>
+                        {!message.attachment && <button type="button" onClick={() => { setEditingId(message.id); setEditDraft(message.text); }} style={{ border: 0, background: "transparent", color: "#9db8ff", fontSize: 11, cursor: "pointer" }}>Edit</button> }
                         <button type="button" onClick={() => deleteMessage(message.id)} style={{ border: 0, background: "transparent", color: "#ff9eae", fontSize: 11, cursor: "pointer" }}>Delete</button>
                       </div>
                     )}
@@ -231,11 +278,13 @@ export function Workspace() {
               <div ref={bottomRef} />
             </div>
 
-            <form onSubmit={sendMessage} style={{ display: "flex", gap: 10, padding: 16, borderTop: "1px solid #26334b", background: "#0d1727" }}>
+            <form onSubmit={sendMessage} style={{ display: "flex", gap: 10, padding: 16, borderTop: "1px solid #26334b", background: "#0d1727", alignItems: "center" }}>
+              <input ref={fileInputRef} type="file" onChange={uploadFile} disabled={!connected || uploading} style={{ display: "none" }} aria-label="Choose an attachment" />
+              <button type="button" onClick={() => fileInputRef.current?.click()} disabled={!connected || uploading} title="Attach a file (5 MB maximum)" style={{ padding: "0 14px", minHeight: 46, border: "1px solid #354663", borderRadius: 10, background: "#17243a", color: "#cbd8ec", fontSize: 20, cursor: "pointer" }}>{uploading ? "…" : "＋"}</button>
               <input value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={2000} placeholder={connected ? "Write a message…" : "Reconnecting…"} disabled={!connected} aria-label="Message" style={{ flex: 1, minWidth: 0, padding: 14, borderRadius: 10, border: "1px solid #354663", background: "#101a2b", color: "#e7eefb", outline: "none" }} />
               <button type="submit" disabled={!connected || !draft.trim()} style={{ padding: "0 20px", border: 0, borderRadius: 10, background: connected && draft.trim() ? "#86a8ff" : "#465675", color: "#081020", fontWeight: 700 }}>Send</button>
             </form>
-            <div style={{ padding: "0 18px 12px", color: "#7184a3", fontSize: 11 }}>{notice} · Messages are currently kept in temporary server memory.</div>
+            <div style={{ padding: "0 18px 12px", color: "#7184a3", fontSize: 11 }}>{notice} · Messages and attachments are currently kept in temporary server memory. Attachments: up to 5 MB each.</div>
           </section>
         )}
         <footer style={{ color: "#657895", fontSize: 12, marginTop: 20, textAlign: "center" }}>SYNCSPACE · Community chat · Room: {ROOM_ID}</footer>
