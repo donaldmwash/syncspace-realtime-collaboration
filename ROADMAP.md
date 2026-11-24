@@ -62,9 +62,10 @@ This tracker distinguishes database groundwork from user-facing, tested function
 - [x] 24-hour image/video status updates with contact-scoped storage and automatic cleanup.
 - [x] Conversation-level disappearing messages with scheduled storage cleanup.
 - [~] Account blocking and report submission are implemented; report review queues, spam protection, admin moderation and audit trails remain outstanding.
-- [x] Profile controls for online-presence and last-seen visibility.
-- [ ] Device/session management and server-side enforcement of last-seen visibility.
-- [ ] Backup/export and account recovery hardening.
+- [~] Profile presence privacy preferences are stored; last-seen visibility is not yet enforced across profile reads.
+- [~] Device registration and sign-out-other-sessions; individual session revocation and full session inventory remain outstanding.
+- [x] Conversation-history JSON export with attachment metadata (file bytes are not included).
+- [ ] Full backup/restore and account recovery hardening.
 - [ ] Encryption design review; do not claim end-to-end encryption until independently tested.
 
 ## Phase 5 — Calls, automation and operations
