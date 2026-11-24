@@ -26,7 +26,7 @@ The `feature/syncspace-2-auth-foundation` branch connects the web client to the 
 - 24-hour image/video status updates with contact-scoped private media and automatic expiry cleanup.
 - Account blocking (direct-message restrictions and hidden blocked-user messages) and report submission.
 
-Some controls are intentionally not presented as finished features yet: QR invite rendering, ownership transfer, granular channel permissions, contact cards, live location sharing and link previews, full report moderation, channel analytics, push notifications, WebRTC calls, bots, device/session management, export/backup and end-to-end encryption remain outstanding. Automated and multi-account acceptance testing is also required before production release.
+Some controls are intentionally not presented as finished features yet: QR invite rendering, ownership transfer, granular channel permissions, contact cards, live location sharing and link previews, full report moderation, push notifications, WebRTC calls, bots, device/session management, export/backup and end-to-end encryption remain outstanding. Automated and multi-account acceptance testing is also required before production release.
 
 ## Database migrations\n\nSchema changes for full-text search, message mentions, direct-message block enforcement, public channel subscriptions and unread counters are tracked under `supabase/migrations`. Apply migrations in timestamp order to a new Supabase project after the baseline schema has been provisioned.\n\n## Local setup
 
