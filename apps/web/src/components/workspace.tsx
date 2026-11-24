@@ -17,6 +17,7 @@ type Conversation = {
 };
 type ConversationTopic = { id: string; name: string; description: string | null };
 type ConversationFolder = { id: string; name: string; position: number };
+type SharedMediaItem = { id:string; file_name:string; mime_type:string|null; size_bytes:number; created_at:string; signedUrl:string };
 type StatusItem = { id: string; user_id: string; media_path: string; media_type: string | null; caption: string | null; expires_at: string; created_at: string; owner?: { display_name: string; avatar_url?: string | null }; signedUrl?: string };
 type Attachment = { id: string; file_name: string; mime_type: string | null; size_bytes: number; object_path: string; signedUrl?: string };
 type Poll = { id: string; question: string; allows_multiple: boolean; closes_at: string | null; poll_options: { id: string; label: string; position: number }[]; poll_votes: { option_id: string; user_id: string }[] };
@@ -93,6 +94,8 @@ export function Workspace() {
   const [forwardMessageId, setForwardMessageId] = useState("");
   const [showSaved, setShowSaved] = useState(false);
   const [showPinned, setShowPinned] = useState(false);
+  const [showMedia, setShowMedia] = useState(false);
+  const [sharedMedia, setSharedMedia] = useState<SharedMediaItem[]>([]);
   const [showFolders, setShowFolders] = useState(false);
   const [folders, setFolders] = useState<ConversationFolder[]>([]);
   const [folderAssignments, setFolderAssignments] = useState<Record<string,string>>({});
@@ -683,6 +686,22 @@ export function Workspace() {
     setNotice(folderId ? "Conversation added to folder." : "Conversation removed from folders.");
   }
 
+
+  async function openSharedMedia() {
+    if (!supabase || !activeConversation) return;
+    const { data, error } = await supabase.from("attachments")
+      .select("id,file_name,mime_type,size_bytes,object_path,created_at")
+      .eq("conversation_id", activeConversation.id)
+      .order("created_at", { ascending: false }).limit(100);
+    if (error) { setNotice(error.message); return; }
+    const items = await Promise.all((data ?? []).map(async (item: any) => {
+      const { data: signed, error: signedError } = await supabase.storage.from("conversation-files").createSignedUrl(item.object_path, 3600);
+      return signedError || !signed?.signedUrl ? null : { ...item, signedUrl: signed.signedUrl } as SharedMediaItem;
+    }));
+    setSharedMedia(items.filter((item): item is SharedMediaItem => !!item));
+    setShowMedia(true);
+  }
+
   async function openPinnedMessages() {
     if (!supabase || !activeConversation) return;
     const { data: pins, error } = await supabase.from("message_pins").select("id,message_id").eq("conversation_id", activeConversation.id).order("created_at", { ascending: false });
@@ -1002,7 +1021,7 @@ export function Workspace() {
           {activeConversation ? <>
             <header style={{ padding: "17px 20px", borderBottom: "1px solid #26334b", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div><strong style={{ fontSize: 17 }}>{activeConversation.title || "Conversation"}</strong><div style={{ color: "#8193b1", fontSize: 12, marginTop: 4 }}>{activeConversation.is_private ? "Private conversation" : "Public community"} · {onlineCount} online{activeConversation.is_announcement_only ? " · Announcements" : ""}{activeConversation.message_ttl_seconds ? " · Disappearing " + (activeConversation.message_ttl_seconds / 3600 >= 24 ? (activeConversation.message_ttl_seconds / 86400) + "d" : (activeConversation.message_ttl_seconds / 3600) + "h") : ""}</div></div>
-              <div style={{ display: "flex", gap: 8 }}><button onClick={() => setShowSchedule(true)} style={secondaryButton}>Scheduled</button>{["owner","admin"].includes(activeConversation.role ?? "") && <button onClick={() => { setTtlSeconds(String(activeConversation.message_ttl_seconds ?? 0)); setShowConversationSettings(true); }} style={secondaryButton}>Privacy</button>}<button onClick={() => void openPinnedMessages()} style={secondaryButton}>Pinned</button><button onClick={() => setShowTopics(true)} style={secondaryButton}>Topics</button><button onClick={() => setShowMembers(true)} style={secondaryButton}>Members / invite</button></div>
+              <div style={{ display: "flex", gap: 8 }}><button onClick={() => setShowSchedule(true)} style={secondaryButton}>Scheduled</button>{["owner","admin"].includes(activeConversation.role ?? "") && <button onClick={() => { setTtlSeconds(String(activeConversation.message_ttl_seconds ?? 0)); setShowConversationSettings(true); }} style={secondaryButton}>Privacy</button>}<button onClick={() => void openSharedMedia()} style={secondaryButton}>Media</button><button onClick={() => void openPinnedMessages()} style={secondaryButton}>Pinned</button><button onClick={() => setShowTopics(true)} style={secondaryButton}>Topics</button><button onClick={() => setShowMembers(true)} style={secondaryButton}>Members / invite</button></div>
             </header>
             <div aria-live="polite" style={{ flex: 1, minHeight: 400, maxHeight: "calc(100vh - 230px)", overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
               {visibleMessages.map((message) => {
@@ -1051,6 +1070,7 @@ export function Workspace() {
 
       {showPasswordRecovery && <div style={modalStyle}><form onSubmit={updateRecoveredPassword} style={{ ...panel, width: "min(100%, 420px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Choose a new password</h2><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} required placeholder="New password (8+ characters)" style={inputStyle} /><button disabled={busy} style={primaryButton}>Update password</button><p style={{ color: "#8193b1", fontSize: 12 }}>{notice}</p></form></div>}
       {showFolders && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 480px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Conversation folders</h2><form onSubmit={createFolder} style={{ display: "flex", gap: 8 }}><input value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} maxLength={40} placeholder="New folder name" required style={inputStyle} /><button style={primaryButton}>Create</button></form>{activeConversation && <div style={{ display: "grid", gap: 7 }}><strong style={{ fontSize: 12 }}>Organise current conversation</strong><select value={folderAssignments[activeConversation.id] || ""} onChange={(e) => void assignActiveConversation(e.target.value)} style={inputStyle}><option value="">No folder</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></div>}<button onClick={() => setShowFolders(false)} style={secondaryButton}>Close</button></section></div>}
+      {showMedia && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 700px)", maxHeight: "88vh", overflowY: "auto", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Shared media and files</h2>{sharedMedia.map((item) => <div key={item.id} style={{ display: "grid", gap: 7, padding: 10, borderRadius: 9, background: "#14233a" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}><strong style={{ fontSize: 13 }}>{item.file_name}</strong><small style={{ color: "#8193b1" }}>{(item.size_bytes / 1024 / 1024).toFixed(1)} MB</small></div>{item.mime_type?.startsWith("image/") ? <img src={item.signedUrl} alt={item.file_name} style={{ maxWidth: "100%", maxHeight: 280, objectFit: "contain" }} /> : item.mime_type?.startsWith("video/") ? <video src={item.signedUrl} controls style={{ maxWidth: "100%", maxHeight: 280 }} /> : item.mime_type?.startsWith("audio/") ? <audio src={item.signedUrl} controls style={{ width: "100%" }} /> : <a href={item.signedUrl} target="_blank" rel="noreferrer" style={{ color: "#9db8ff" }}>Open / download file</a>}<small style={{ color: "#8193b1" }}>{new Date(item.created_at).toLocaleString()}</small></div>)}{!sharedMedia.length && <small style={{ color: "#8193b1" }}>No shared files in this conversation yet.</small>}<button onClick={() => setShowMedia(false)} style={secondaryButton}>Close</button></section></div>}
       {showPinned && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 560px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Pinned messages</h2>{pinnedMessages.filter((item) => item.message).map((item) => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", padding: 8, background: "#14233a", borderRadius: 8 }}><span style={{ fontSize: 13 }}>{item.message?.body || "Pinned attachment"}</span>{["owner","admin"].includes(activeConversation?.role ?? "") && <button onClick={() => void unpinMessage(item.id)} style={secondaryButton}>Unpin</button>}</div>)}{!pinnedMessages.some((item) => item.message) && <small style={{ color: "#8193b1" }}>No pinned messages in this conversation.</small>}<button onClick={() => setShowPinned(false)} style={secondaryButton}>Close</button></section></div>}
       {showSaved && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 560px)", maxHeight: "85vh", overflowY: "auto", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Saved Messages</h2>{savedMessages.filter((item) => item.message).map((item) => <button key={item.message_id} onClick={() => { setActiveId(item.message!.conversation_id); setShowSaved(false); }} style={{ ...secondaryButton, textAlign: "left" }}><strong>{item.message?.body || "Saved attachment"}</strong><small style={{ display: "block", color: "#8193b1" }}>{new Date(item.message?.created_at || item.created_at).toLocaleString()}</small></button>)}{!savedMessages.some((item) => item.message) && <small style={{ color: "#8193b1" }}>No saved messages yet. Use Save beneath a message to keep it here.</small>}<button onClick={() => setShowSaved(false)} style={secondaryButton}>Close</button></section></div>}
       {forwardMessageId && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 460px)", padding: 22, display: "grid", gap: 10 }}><h2 style={{ margin: 0 }}>Forward message</h2><p style={{ color: "#8193b1", fontSize: 12 }}>Choose a conversation to forward this text message into.</p>{conversations.filter((item) => item.id !== activeId).map((conversation) => <button key={conversation.id} onClick={() => void forwardTo(conversation.id)} style={{ ...secondaryButton, textAlign: "left" }}>{conversation.title || "Conversation"}</button>)}<button onClick={() => setForwardMessageId("")} style={secondaryButton}>Cancel</button></section></div>}
