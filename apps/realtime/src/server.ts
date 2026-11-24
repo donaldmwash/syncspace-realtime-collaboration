@@ -29,6 +29,7 @@ io.on("connection", (socket) => {
   const roomId = String(socket.handshake.auth.roomId || "public-demo").slice(0, 100);
   const rawName = String(socket.handshake.auth.displayName || "Guest");
   const displayName = rawName.replace(/[<>\u0000-\u001f]/g, "").trim().slice(0, 32) || "Guest";
+  const authorId = String(socket.handshake.auth.authorId || socket.id).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80) || socket.id;
 
   socket.join(roomId);
   socket.emit("chat:history", roomMessages.get(roomId) ?? []);
@@ -45,7 +46,7 @@ io.on("connection", (socket) => {
     const message: ChatMessage = {
       id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
       sender: displayName,
-      senderId: socket.id,
+      senderId: authorId,
       text,
       createdAt: new Date().toISOString(),
     };
@@ -63,7 +64,7 @@ io.on("connection", (socket) => {
     if (!text) return;
     const history = roomMessages.get(roomId) ?? [];
     const message = history.find((item) => item.id === payload.id);
-    if (!message || message.senderId !== socket.id) return;
+    if (!message || message.senderId !== authorId) return;
     message.text = text;
     message.editedAt = new Date().toISOString();
     io.to(roomId).emit("chat:message-updated", message);
@@ -80,7 +81,7 @@ io.on("connection", (socket) => {
 
   socket.on("chat:clear-mine", () => {
     const history = roomMessages.get(roomId) ?? [];
-    const remaining = history.filter((item) => item.senderId !== socket.id);
+    const remaining = history.filter((item) => item.senderId !== authorId);
     const deletedIds = history.filter((item) => item.senderId === socket.id).map((item) => item.id);
     roomMessages.set(roomId, remaining);
     if (deletedIds.length) io.to(roomId).emit("chat:messages-deleted", { ids: deletedIds });
