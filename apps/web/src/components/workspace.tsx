@@ -66,6 +66,7 @@ export function Workspace() {
   const [uploading, setUploading] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileUsername, setProfileUsername] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState("");
   const [showProfile, setShowProfile] = useState(false);
   const [showPasswordRecovery, setShowPasswordRecovery] = useState(false);
   const [newPassword, setNewPassword] = useState("");
@@ -143,9 +144,10 @@ export function Workspace() {
       const metaName = String(user.user_metadata?.display_name ?? "");
       const cleanName = metaName || user.email?.split("@")[0] || "Member";
       await supabase.from("profiles").upsert({ id: user.id, display_name: cleanName.slice(0, 60) }, { onConflict: "id", ignoreDuplicates: true });
-      const { data: profile } = await supabase.from("profiles").select("display_name,username").eq("id", user.id).maybeSingle();
+      const { data: profile } = await supabase.from("profiles").select("display_name,username,avatar_url").eq("id", user.id).maybeSingle();
       setProfileName(profile?.display_name ?? cleanName);
       setProfileUsername(profile?.username ?? "");
+      setAvatarUrl(profile?.avatar_url ?? "");
       await loadConversations(user);
     })();
   }, [user, supabase, loadConversations]);
@@ -276,12 +278,28 @@ export function Workspace() {
     setNotice("Private conversation started with " + member.display_name + ".");
   }
 
+
+  async function uploadAvatar(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !supabase || !user) return;
+    if (!file.type.startsWith("image/")) { setNotice("Choose an image for your profile picture."); return; }
+    if (file.size > 5 * 1024 * 1024) { setNotice("Profile pictures must be 5 MB or smaller."); return; }
+    const extension = file.name.split(".").pop()?.replace(/[^a-zA-Z0-9]/g, "") || "jpg";
+    const path = user.id + "/" + crypto.randomUUID() + "." + extension;
+    const { error } = await supabase.storage.from("avatars").upload(path, file, { contentType: file.type, upsert: false });
+    if (error) { setNotice(error.message); return; }
+    const { data } = supabase.storage.from("avatars").getPublicUrl(path);
+    setAvatarUrl(data.publicUrl);
+    setNotice("Profile picture uploaded. Save your profile to apply it.");
+  }
+
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!supabase || !user) return;
     const cleanUsername = profileUsername.trim().replace(/^@/, "");
     if (cleanUsername && !/^[A-Za-z0-9_]{3,24}$/.test(cleanUsername)) { setNotice("Username must be 3–24 characters using letters, numbers or underscores."); return; }
-    const { error } = await supabase.from("profiles").update({ display_name: profileName.trim().slice(0, 60), username: cleanUsername || null }).eq("id", user.id);
+    const { error } = await supabase.from("profiles").update({ display_name: profileName.trim().slice(0, 60), username: cleanUsername || null, avatar_url: avatarUrl || null }).eq("id", user.id);
     setNotice(error ? error.message : "Profile updated.");
     setShowProfile(false);
   }
@@ -473,7 +491,7 @@ export function Workspace() {
 
       {showMembers && activeConversation && <div style={modalStyle}><section style={{ ...panel, width: "min(100%, 480px)", padding: 22 }}><h2 style={{ marginTop: 0 }}>Add members</h2><p style={{ color: "#8193b1", fontSize: 13 }}>Search by exact or partial username. People must set a username in their profile to be found.</p><form onSubmit={findMembers} style={{ display: "flex", gap: 8 }}><input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="@username" style={inputStyle} /><button style={primaryButton}>Find</button></form><div style={{ display: "grid", gap: 8, marginTop: 14 }}>{memberResults.map((member) => <div key={member.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 10, background: "#14233a", borderRadius: 8 }}><span>{member.display_name} <small style={{ color: "#8193b1" }}>@{member.username}</small></span><div style={{ display: "flex", gap: 6 }}><button onClick={() => void addMember(member.id)} style={secondaryButton}>Add</button><button onClick={() => void startDirect(member)} style={secondaryButton}>Message</button></div></div>)}</div><button onClick={() => setShowMembers(false)} style={{ ...secondaryButton, width: "100%", marginTop: 14 }}>Close</button></section></div>}
 
-      {showProfile && <div style={modalStyle}><form onSubmit={saveProfile} style={{ ...panel, width: "min(100%, 440px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Your profile</h2><label style={{ color: "#cbd8ec", fontSize: 13 }}>Display name<input value={profileName} onChange={(e) => setProfileName(e.target.value)} maxLength={60} required style={{ ...inputStyle, marginTop: 6 }} /></label><label style={{ color: "#cbd8ec", fontSize: 13 }}>Username<input value={profileUsername} onChange={(e) => setProfileUsername(e.target.value)} maxLength={24} placeholder="your_username" style={{ ...inputStyle, marginTop: 6 }} /></label><small style={{ color: "#8193b1" }}>Username must be unique and 3–24 letters, numbers or underscores. Email: {user.email}</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowProfile(false)} style={secondaryButton}>Cancel</button><button style={primaryButton}>Save profile</button></div></form></div>}
+      {showProfile && <div style={modalStyle}><form onSubmit={saveProfile} style={{ ...panel, width: "min(100%, 440px)", padding: 22, display: "grid", gap: 12 }}><h2 style={{ margin: 0 }}>Your profile</h2>{avatarUrl && <img src={avatarUrl} alt="Your profile" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: "50%" }} />}<label style={{ color: "#cbd8ec", fontSize: 13 }}>Profile picture<input type="file" accept="image/*" onChange={uploadAvatar} style={{ display: "block", marginTop: 7, color: "#aebfda" }} /></label><label style={{ color: "#cbd8ec", fontSize: 13 }}>Display name<input value={profileName} onChange={(e) => setProfileName(e.target.value)} maxLength={60} required style={{ ...inputStyle, marginTop: 6 }} /></label><label style={{ color: "#cbd8ec", fontSize: 13 }}>Username<input value={profileUsername} onChange={(e) => setProfileUsername(e.target.value)} maxLength={24} placeholder="your_username" style={{ ...inputStyle, marginTop: 6 }} /></label><small style={{ color: "#8193b1" }}>Username must be unique and 3–24 letters, numbers or underscores. Email: {user.email}</small><div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}><button type="button" onClick={() => setShowProfile(false)} style={secondaryButton}>Cancel</button><button style={primaryButton}>Save profile</button></div></form></div>}
     </main>
   );
 }
