@@ -61,7 +61,7 @@ This tracker distinguishes database groundwork from user-facing, tested function
 
 - [x] 24-hour image/video status updates with contact-scoped storage and automatic cleanup.
 - [x] Conversation-level disappearing messages with scheduled storage cleanup.
-- [~] Account blocking and report submission are implemented; report review queues, spam protection, admin moderation and audit trails remain outstanding.
+- [x] Per-user message rate limiting (30 messages per minute) to reduce basic spam bursts.\n- [~] Account blocking and report submission are implemented; report review queues, advanced spam protection, admin moderation and audit trails remain outstanding.
 - [~] Profile presence privacy preferences are stored; last-seen visibility is not yet enforced across profile reads.
 - [~] Device registration and sign-out-other-sessions; individual session revocation and full session inventory remain outstanding.
 - [x] Conversation-history JSON export with attachment metadata (file bytes are not included).
